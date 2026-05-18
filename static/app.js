@@ -55,6 +55,10 @@ const state = {
   dirty: false,
   saving: false,
   lastSavedSnapshot: null,
+  retainImageMode: 'selected',
+  lastSelectedImage: '',
+  lastSavedImage: '',
+  stepClipboard: null,
   serverPrograms: [],
 };
 
@@ -94,6 +98,16 @@ function deepClone(value) {
 function sanitizeFilename(value) {
   const cleaned = String(value || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^[_\.]+|[_\.]+$/g, '');
   return cleaned || 'program';
+}
+
+function retainedImageForAutoload() {
+  if (state.retainImageMode === 'selected' && state.lastSelectedImage) {
+    return state.lastSelectedImage;
+  }
+  if (state.retainImageMode === 'saved' && state.lastSavedImage) {
+    return state.lastSavedImage;
+  }
+  return '';
 }
 
 function expectedProgramFileName() {
@@ -273,14 +287,113 @@ function renderModeCards(step) {
   });
 }
 
+function normalizeStepForIndex(step, index) {
+  const normalized = deepClone(step);
+  applyExclusiveModeFromStep(normalized, 'enable_barcode');
+  if (!normalized.enable_barcode) {
+    applyExclusiveModeFromStep(normalized, 'request_ack');
+    if (!normalized.request_ack) {
+      applyExclusiveModeFromStep(normalized, 'enable_fastening');
+    }
+  }
+  normalized.step_no = index + 1;
+  enforceBcRoleByStepNo(normalized, normalized.step_no);
+  return normalized;
+}
+
+function snapshotStepForClipboard(index) {
+  if (index === state.currentIndex && state.dirty) {
+    return collectFormStep();
+  }
+  return deepClone(state.program.steps[index]);
+}
+
+function copyStepParameters(index) {
+  if (index < 0 || index >= state.program.steps.length) return;
+  state.stepClipboard = {
+    sourceIndex: index,
+    step: snapshotStepForClipboard(index),
+  };
+  renderStepList();
+}
+
+function pasteStepParameters(index) {
+  if (!state.stepClipboard || !state.stepClipboard.step) {
+    alert('Copy a step first.');
+    return;
+  }
+  if (index < 0 || index >= state.program.steps.length) return;
+
+  if (state.dirty && state.currentIndex !== index) {
+    state.program.steps[state.currentIndex] = collectFormStep();
+  }
+
+  state.program.steps[index] = normalizeStepForIndex(state.stepClipboard.step, index);
+  state.currentIndex = index;
+  state.dirty = true;
+  renderEditor();
+}
+
 function renderStepList() {
   els.stepList.innerHTML = '';
+  let previousMode = '';
+  let modeRunCount = 0;
+
   state.program.steps.forEach((step, index) => {
     const li = document.createElement('li');
     li.dataset.index = index;
-    li.innerHTML = `<span>Step ${step.step_no}</span><span>${modeLabels(step)}</span>`;
+    const activeMode = getActiveMode(step);
+    let modeText = modeLabels(step);
+    if (activeMode) {
+      if (activeMode === previousMode) {
+        modeRunCount += 1;
+      } else {
+        previousMode = activeMode;
+        modeRunCount = 1;
+      }
+      modeText = `${activeMode} (${modeRunCount})`;
+    } else {
+      previousMode = '';
+      modeRunCount = 0;
+    }
+
+    const summary = document.createElement('div');
+    summary.className = 'step-list-summary';
+    const stepName = document.createElement('span');
+    stepName.textContent = `Step ${step.step_no}`;
+    const stepMode = document.createElement('span');
+    stepMode.textContent = modeText;
+    summary.append(stepName, stepMode);
+
+    const actions = document.createElement('div');
+    actions.className = 'step-list-actions';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'secondary';
+    copyBtn.textContent = 'Copy';
+    copyBtn.title = 'Copy all parameters from this step';
+    copyBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      copyStepParameters(index);
+    });
+
+    const pasteBtn = document.createElement('button');
+    pasteBtn.type = 'button';
+    pasteBtn.className = 'secondary';
+    pasteBtn.textContent = 'Paste';
+    pasteBtn.title = 'Paste copied parameters to this step';
+    pasteBtn.disabled = !state.stepClipboard;
+    pasteBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      pasteStepParameters(index);
+    });
+
+    actions.append(copyBtn, pasteBtn);
+    li.append(summary, actions);
     if (index === state.currentIndex) li.classList.add('active');
     if (state.dirty && index === state.currentIndex) li.classList.add('unsaved');
+    if (state.stepClipboard && state.stepClipboard.sourceIndex === index) li.classList.add('copied');
     li.addEventListener('click', () => selectStep(index));
     els.stepList.appendChild(li);
   });
@@ -352,6 +465,12 @@ function enforceBcRoleByStepNo(step, stepNo) {
 }
 
 function createCommonImageSection(step, index) {
+  const DEFAULT_CANVAS_DISPLAY_SCALE = 1.5;
+  const viewportSafeWidth = Math.max(320, Math.floor(window.innerWidth * 0.58));
+  const viewportSafeHeight = Math.max(220, Math.floor(window.innerHeight * 0.5));
+  const CANVAS_MAX_WIDTH = Math.max(240, Math.floor(Math.min(864, viewportSafeWidth)));
+  const CANVAS_MAX_HEIGHT = Math.max(160, Math.floor(Math.min(486, viewportSafeHeight)));
+
   const sectionEl = document.createElement('section');
   sectionEl.className = 'section';
 
@@ -371,6 +490,74 @@ function createCommonImageSection(step, index) {
   hidden.type = 'hidden';
   hidden.dataset.key = 'upload_image';
   hidden.value = step.upload_image || '';
+
+  const originalStepImage = String(step.upload_image || '').trim();
+
+  if (hidden.value && !state.lastSelectedImage) {
+    state.lastSelectedImage = hidden.value;
+  }
+  if (hidden.value && !state.lastSavedImage) {
+    state.lastSavedImage = hidden.value;
+  }
+
+  const retainModeRow = document.createElement('div');
+  retainModeRow.className = 'retain-mode-row';
+
+  const retainOriginalLabel = document.createElement('label');
+  retainOriginalLabel.className = 'checkbox-row';
+  const retainOriginalInput = document.createElement('input');
+  retainOriginalInput.type = 'checkbox';
+  retainOriginalInput.checked = false;
+  const retainOriginalText = document.createElement('span');
+  retainOriginalText.textContent = 'Retain original image';
+  retainOriginalLabel.append(retainOriginalInput, retainOriginalText);
+
+  const retainSavedLabel = document.createElement('label');
+  retainSavedLabel.className = 'checkbox-row';
+  const retainSavedInput = document.createElement('input');
+  retainSavedInput.type = 'checkbox';
+  retainSavedInput.checked = false;
+  const retainSavedText = document.createElement('span');
+  retainSavedText.textContent = 'Retain last edited image';
+  retainSavedLabel.append(retainSavedInput, retainSavedText);
+
+  function setRetainMode(mode) {
+    state.retainImageMode = mode || '';
+    const currentImage = String(hidden.value || '').trim();
+    if (mode === 'selected' && currentImage) {
+      state.lastSelectedImage = currentImage;
+    }
+    if (mode === 'saved' && currentImage) {
+      state.lastSavedImage = currentImage;
+    }
+    if (!mode && originalStepImage) {
+      hidden.value = originalStepImage;
+      const storedImageSrc = resolveStoredImageSrc(originalStepImage);
+      if (storedImageSrc) {
+        setCanvasFromImageSrc(storedImageSrc, false);
+      }
+    }
+    retainOriginalInput.checked = mode === 'selected';
+    retainSavedInput.checked = mode === 'saved';
+  }
+
+  retainOriginalInput.addEventListener('change', () => {
+    if (retainOriginalInput.checked) {
+      setRetainMode('selected');
+      return;
+    }
+    setRetainMode('');
+  });
+
+  retainSavedInput.addEventListener('change', () => {
+    if (retainSavedInput.checked) {
+      setRetainMode('saved');
+      return;
+    }
+    setRetainMode('');
+  });
+
+  retainModeRow.append(retainOriginalLabel, retainSavedLabel);
 
   const controls = document.createElement('div');
   controls.className = 'image-upload-controls';
@@ -403,8 +590,26 @@ function createCommonImageSection(step, index) {
   textSize.type = 'number';
   textSize.min = '10';
   textSize.max = '96';
-  textSize.value = '26';
+  textSize.value = '18';
   textSize.className = 'image-size-input';
+
+  const zoomWrap = document.createElement('label');
+  zoomWrap.className = 'image-zoom-wrap';
+  zoomWrap.textContent = 'Zoom';
+
+  const zoomSlider = document.createElement('input');
+  zoomSlider.type = 'range';
+  zoomSlider.min = '10';
+  zoomSlider.max = '200';
+  zoomSlider.step = '5';
+  zoomSlider.value = String(Math.round(DEFAULT_CANVAS_DISPLAY_SCALE * 100));
+  zoomSlider.className = 'image-zoom-slider';
+
+  const zoomValue = document.createElement('span');
+  zoomValue.className = 'image-zoom-value';
+  zoomValue.textContent = `${zoomSlider.value}%`;
+
+  zoomWrap.append(zoomSlider, zoomValue);
 
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
@@ -422,19 +627,49 @@ function createCommonImageSection(step, index) {
   undoBtn.textContent = 'Undo';
   undoBtn.disabled = true;
 
+  const rotateLeftBtn = document.createElement('button');
+  rotateLeftBtn.type = 'button';
+  rotateLeftBtn.className = 'secondary';
+  rotateLeftBtn.textContent = 'Rotate Left';
+
+  const rotateRightBtn = document.createElement('button');
+  rotateRightBtn.type = 'button';
+  rotateRightBtn.className = 'secondary';
+  rotateRightBtn.textContent = 'Rotate Right';
+
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'image-canvas-wrap';
 
   const canvas = document.createElement('canvas');
   canvas.className = 'image-canvas';
-  canvas.width = 960;
-  canvas.height = 540;
+  canvas.width = CANVAS_MAX_WIDTH;
+  canvas.height = CANVAS_MAX_HEIGHT;
   canvasWrap.appendChild(canvas);
 
   const ctx = canvas.getContext('2d');
   const MAX_HISTORY = 30;
   let history = [];
   let historyIndex = -1;
+  let canvasDisplayScale = DEFAULT_CANVAS_DISPLAY_SCALE;
+
+  function setCanvasZoom(zoomPercent) {
+    const normalized = Number.isFinite(zoomPercent) ? zoomPercent : 100;
+    const clamped = Math.min(200, Math.max(10, normalized));
+    canvasDisplayScale = clamped / 100;
+    zoomSlider.value = String(Math.round(clamped));
+    zoomValue.textContent = `${Math.round(clamped)}%`;
+    updateCanvasDisplaySize();
+  }
+
+  function updateCanvasDisplaySize() {
+    const displayWidth = Math.max(140, Math.round(canvas.width * canvasDisplayScale));
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = 'auto';
+  }
+
+  zoomSlider.addEventListener('input', () => {
+    setCanvasZoom(Number(zoomSlider.value));
+  });
 
   function resolveStoredImageSrc(value) {
     const raw = String(value || '').trim();
@@ -442,14 +677,20 @@ function createCommonImageSection(step, index) {
     if (raw.startsWith('data:image')) return raw;
 
     const normalized = raw.replace(/\\/g, '/');
-    if (normalized.startsWith('/programs/')) return normalized;
-    if (normalized.startsWith('programs/')) return `/${normalized}`;
+    const cacheBuster = '?t=' + Date.now();
+    
+    if (normalized.startsWith('/programs/')) {
+      const sep = normalized.includes('?') ? '&' : '?';
+      return normalized + sep + 't=' + Date.now();
+    }
+    if (normalized.startsWith('programs/')) return `/${normalized}${cacheBuster}`;
 
     if (/^https?:\/\//i.test(normalized)) {
       try {
         const parsed = new URL(normalized);
         if (parsed.pathname.startsWith('/programs/')) {
-          return `${parsed.pathname}${parsed.search || ''}`;
+          const sep = parsed.search ? '&' : '?';
+          return `${parsed.pathname}${parsed.search || ''}${sep}t=${Date.now()}`;
         }
       } catch (_error) {
       }
@@ -457,11 +698,11 @@ function createCommonImageSection(step, index) {
     }
 
     if (/^[^/]+\/[^/]+$/i.test(normalized)) {
-      return `/programs/${normalized}`;
+      return `/programs/${normalized}${cacheBuster}`;
     }
 
     if (/^[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(normalized)) {
-      return `/programs/${sanitizeFilename(step.partname || state.program.partname)}/${normalized}`;
+      return `/programs/${sanitizeFilename(step.partname || state.program.partname)}/imgs/${normalized}${cacheBuster}`;
     }
 
     return normalized;
@@ -472,12 +713,10 @@ function createCommonImageSection(step, index) {
   }
 
   function pushHistory(markAsEdited = true, updateHidden = true) {
-    const snapshotData = canvas.toDataURL('image/jpeg', 0.92);
+    const snapshotData = canvas.toDataURL('image/png');
     if (historyIndex >= 0 && history[historyIndex] === snapshotData) {
       if (updateHidden) {
         hidden.value = snapshotData;
-        preview.src = snapshotData;
-        preview.classList.add('visible');
       }
       return;
     }
@@ -493,8 +732,7 @@ function createCommonImageSection(step, index) {
 
     if (updateHidden) {
       hidden.value = snapshotData;
-      preview.src = snapshotData;
-      preview.classList.add('visible');
+      state.lastSavedImage = snapshotData;
     }
     if (markAsEdited) {
       markDirty();
@@ -509,12 +747,11 @@ function createCommonImageSection(step, index) {
     img.onload = () => {
       canvas.width = img.width;
       canvas.height = img.height;
+      updateCanvasDisplaySize();
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       hidden.value = dataUrl;
-      preview.src = dataUrl;
-      preview.classList.add('visible');
       if (markAsEdited) {
         markDirty();
       }
@@ -542,16 +779,19 @@ function createCommonImageSection(step, index) {
     }
     const img = new Image();
     img.onload = () => {
-      const maxWidth = 960;
-      const maxHeight = 540;
+      const maxWidth = CANVAS_MAX_WIDTH;
+      const maxHeight = CANVAS_MAX_HEIGHT;
       const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
       const w = Math.max(1, Math.round(img.width * scale));
       const h = Math.max(1, Math.round(img.height * scale));
-      canvas.width = w;
-      canvas.height = h;
+      canvas.width = maxWidth;
+      canvas.height = maxHeight;
+      updateCanvasDisplaySize();
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0, w, h);
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const x = Math.round((canvas.width - w) / 2);
+      const y = Math.round((canvas.height - h) / 2);
+      ctx.drawImage(img, x, y, w, h);
       history = [];
       historyIndex = -1;
       pushHistory(markAsEdited, true);
@@ -564,13 +804,47 @@ function createCommonImageSection(step, index) {
   }
 
   function resetCanvasBlank() {
-    canvas.width = 960;
-    canvas.height = 540;
+    canvas.width = CANVAS_MAX_WIDTH;
+    canvas.height = CANVAS_MAX_HEIGHT;
+    updateCanvasDisplaySize();
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#8c97ad';
     ctx.font = '22px sans-serif';
     ctx.fillText('Upload image and edit here', 24, 44);
+  }
+
+  function rotateCanvas(clockwise = true) {
+    const sourceWidth = canvas.width;
+    const sourceHeight = canvas.height;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return;
+
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = sourceWidth;
+    sourceCanvas.height = sourceHeight;
+    const sourceCtx = sourceCanvas.getContext('2d');
+    sourceCtx.drawImage(canvas, 0, 0);
+
+    canvas.width = sourceHeight;
+    canvas.height = sourceWidth;
+    updateCanvasDisplaySize();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    if (clockwise) {
+      ctx.translate(canvas.width, 0);
+      ctx.rotate(Math.PI / 2);
+    } else {
+      ctx.translate(0, canvas.height);
+      ctx.rotate(-Math.PI / 2);
+    }
+    ctx.drawImage(sourceCanvas, 0, 0);
+    ctx.restore();
+
+    drawing = false;
+    snapshot = null;
+    pushHistory(true, true);
   }
 
   let drawing = false;
@@ -609,7 +883,7 @@ function createCommonImageSection(step, index) {
         return;
       }
       ctx.fillStyle = colorPicker.value;
-      ctx.font = `${Math.max(10, Number(textSize.value) || 26)}px sans-serif`;
+      ctx.font = `${Math.max(10, Number(textSize.value) || 18)}px sans-serif`;
       ctx.fillText(text, pt.x, pt.y);
       pushHistory(true, true);
       return;
@@ -642,21 +916,21 @@ function createCommonImageSection(step, index) {
     pushHistory(true, true);
   });
 
-  const preview = document.createElement('img');
-  preview.className = 'image-preview';
-  preview.alt = 'Step upload preview';
-  const initialImageSrc = resolveStoredImageSrc(hidden.value);
-  if (initialImageSrc) {
-    preview.src = initialImageSrc;
-    preview.classList.add('visible');
+  const retainedImage = retainedImageForAutoload();
+  if (retainedImage) {
+    hidden.value = retainedImage;
   }
+  const initialImageSrc = resolveStoredImageSrc(hidden.value);
 
   fileInput.addEventListener('change', () => {
     const [file] = fileInput.files || [];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      setCanvasFromImageSrc(String(reader.result || ''), true);
+      const selectedImage = String(reader.result || '');
+      state.lastSelectedImage = selectedImage;
+      state.lastSavedImage = selectedImage;
+      setCanvasFromImageSrc(selectedImage, true);
     };
     reader.readAsDataURL(file);
   });
@@ -664,8 +938,12 @@ function createCommonImageSection(step, index) {
   clearBtn.addEventListener('click', () => {
     fileInput.value = '';
     hidden.value = '';
-    preview.removeAttribute('src');
-    preview.classList.remove('visible');
+    if (state.retainImageMode === 'selected') {
+      state.lastSelectedImage = '';
+    }
+    if (state.retainImageMode === 'saved') {
+      state.lastSavedImage = '';
+    }
     resetCanvasBlank();
     pushHistory(true, false);
   });
@@ -680,6 +958,14 @@ function createCommonImageSection(step, index) {
     restoreFromHistory(historyIndex, true);
   });
 
+  rotateLeftBtn.addEventListener('click', () => {
+    rotateCanvas(false);
+  });
+
+  rotateRightBtn.addEventListener('click', () => {
+    rotateCanvas(true);
+  });
+
   if (initialImageSrc) {
     setCanvasFromImageSrc(initialImageSrc, false);
   } else {
@@ -687,8 +973,10 @@ function createCommonImageSection(step, index) {
     pushHistory(false, false);
   }
 
-  controls.append(fileInput, toolSelect, colorPicker, textInput, textSize, saveEditBtn, undoBtn, clearBtn);
-  panel.append(controls, canvasWrap, preview, hidden);
+  setCanvasZoom(Number(zoomSlider.value));
+
+  controls.append(fileInput, toolSelect, colorPicker, textInput, textSize, zoomWrap, saveEditBtn, undoBtn, rotateLeftBtn, rotateRightBtn, clearBtn);
+  panel.append(retainModeRow, controls, canvasWrap, hidden);
   sectionEl.appendChild(panel);
   return sectionEl;
 }
@@ -703,7 +991,7 @@ function renderStepForm() {
   els.formContainer.innerHTML = '';
   const activeMode = getActiveMode(step);
   if (!activeMode) {
-    if (step.upload_image) {
+    if (step.upload_image || retainedImageForAutoload()) {
       els.formContainer.appendChild(createCommonImageSection(step, state.currentIndex + 1));
     }
     return;
@@ -821,6 +1109,7 @@ function selectStep(index) {
 async function saveStep() {
   syncProgramInfoToState();
   const payload = collectFormStep();
+  const savedImageCandidate = String(payload.upload_image || '').trim();
   state.program.steps[state.currentIndex] = payload;
   const response = await fetch(`/api/steps/${state.currentIndex}`, {
     method: 'PUT',
@@ -833,6 +1122,9 @@ async function saveStep() {
     return;
   }
   state.program = await response.json();
+  if (savedImageCandidate) {
+    state.lastSavedImage = savedImageCandidate;
+  }
   syncProgramInfoToState();
   resetDirty();
   renderEditor();

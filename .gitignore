@@ -1,0 +1,7 @@
+/programs/*
+*__pycache__/
+*.pyc
+*.pyo
+programs/*
+__pycache__/program_editor.cpython-314.pyc
+programs/IBE333333_A.json

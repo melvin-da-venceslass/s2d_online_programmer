@@ -192,7 +192,8 @@ def decode_image_data_url(data_url: str) -> Optional[bytes]:
 def persist_program_locked() -> None:
     part = sanitize_filename(CURRENT_DATA.get("partname", "program"))
     json_path = PROGRAMS_DIR / f"{part}.json"
-    image_dir = PROGRAMS_DIR / part
+    image_root = PROGRAMS_DIR / part
+    image_dir = image_root / "imgs"
     image_dir.mkdir(parents=True, exist_ok=True)
 
     active_image_names = set()
@@ -200,14 +201,14 @@ def persist_program_locked() -> None:
         step_no = int(step.get("step_no", 0) or 0)
         if step_no <= 0:
             continue
-        image_name = f"{step_no}.jpg"
+        image_name = f"{step_no}.png"
         image_path = image_dir / image_name
         image_value = step.get("upload_image", "")
 
         decoded = decode_image_data_url(image_value) if isinstance(image_value, str) else None
         if decoded is not None:
             image_path.write_bytes(decoded)
-            step["upload_image"] = f"/programs/{part}/{image_name}"
+            step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
             active_image_names.add(image_name)
             continue
 
@@ -215,10 +216,10 @@ def persist_program_locked() -> None:
             source_path = BASE_DIR / image_value.lstrip("/")
             if source_path.exists():
                 image_path.write_bytes(source_path.read_bytes())
-                step["upload_image"] = f"/programs/{part}/{image_name}"
+                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
                 active_image_names.add(image_name)
             elif image_path.exists():
-                step["upload_image"] = f"/programs/{part}/{image_name}"
+                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
                 active_image_names.add(image_name)
             else:
                 step["upload_image"] = ""
@@ -227,11 +228,34 @@ def persist_program_locked() -> None:
         if not image_value:
             if image_path.exists():
                 image_path.unlink()
+            legacy_png = image_root / f"{step_no}.png"
+            legacy_jpg = image_dir / f"{step_no}.jpg"
+            legacy_jpeg = image_dir / f"{step_no}.jpeg"
+            legacy_root_jpg = image_root / f"{step_no}.jpg"
+            legacy_root_jpeg = image_root / f"{step_no}.jpeg"
+            if legacy_png.exists():
+                legacy_png.unlink()
+            if legacy_jpg.exists():
+                legacy_jpg.unlink()
+            if legacy_jpeg.exists():
+                legacy_jpeg.unlink()
+            if legacy_root_jpg.exists():
+                legacy_root_jpg.unlink()
+            if legacy_root_jpeg.exists():
+                legacy_root_jpeg.unlink()
             step["upload_image"] = ""
 
-    for existing in image_dir.glob("*.jpg"):
-        if existing.name not in active_image_names:
-            existing.unlink()
+    for pattern in ("*.png", "*.jpg", "*.jpeg"):
+        for existing in image_dir.glob(pattern):
+            if existing.name not in active_image_names:
+                existing.unlink()
+
+    # Remove legacy images that used to live directly under /programs/<part>/.
+    for pattern in ("*.png", "*.jpg", "*.jpeg"):
+        for existing in image_root.glob(pattern):
+            step_num = existing.stem
+            if step_num.isdigit() and f"{step_num}.png" not in active_image_names:
+                existing.unlink()
 
     json_path.write_text(json.dumps(CURRENT_DATA, indent=4), encoding="utf-8")
 
@@ -471,7 +495,7 @@ def download_recipe_zip():
             added_arc.add(arc)
 
     mem.seek(0)
-    zip_name = f"{part}_recipe.zip"
+    zip_name = f"mviis_recipie_{part}.zip"
     return Response(
         content=mem.getvalue(),
         media_type="application/zip",

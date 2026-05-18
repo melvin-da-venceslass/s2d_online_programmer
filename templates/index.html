@@ -59,9 +59,13 @@
             <button id="clone-step-btn" class="secondary">Duplicate</button>
           </div>
         </div>
-        <input id="upload-file" type="file" accept="application/json" />
-        <input id="upload-zip-file" type="file" accept=".zip,application/zip" />
-        <ul id="step-list" class="step-list"></ul>
+        <label for="upload-file">Upload Json file</label>
+        <input id="upload-file" type="file" accept="application/json" title="Upload Json file" aria-label="Upload Json file" />
+        <label for="upload-zip-file">Upload Recipe.zip</label>
+        <input id="upload-zip-file" type="file" accept=".zip,application/zip" title="Upload Recipe.zip" aria-label="Upload Recipe.zip" />
+        <div class="step-list-card">
+          <ul id="step-list" class="step-list"></ul>
+        </div>
       </section>
     </aside>
 
