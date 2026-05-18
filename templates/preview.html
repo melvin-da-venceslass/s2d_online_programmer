@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Step Preview</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/preview.css" />
+</head>
+<body class="preview-body">
+  <header class="topbar preview-topbar">
+    <div>
+      <p class="eyebrow">Step Preview</p>
+      <h1 id="preview-partname">Program</h1>
+      <p id="preview-count" class="subtitle"></p>
+    </div>
+    <div class="topbar-actions">
+      <button id="refresh-preview-btn" class="secondary">Refresh</button>
+    </div>
+  </header>
+
+  <main class="preview-layout">
+    <section class="preview-card">
+      <div class="preview-header">
+        <h2 id="preview-step-title">Step 1</h2>
+        <p id="preview-mode" class="mode-summary"></p>
+      </div>
+
+      <div id="preview-image-wrap" class="preview-image-wrap hidden">
+        <img id="preview-image" alt="Step preview image" />
+      </div>
+
+      <div id="preview-fields" class="preview-fields"></div>
+
+      <div class="preview-nav">
+        <button id="prev-step-btn" class="secondary">Previous</button>
+        <input id="preview-step-spinner" type="number" min="1" value="1" />
+        <button id="next-step-btn" class="primary">Next</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/preview.js"></script>
+</body>
+</html>

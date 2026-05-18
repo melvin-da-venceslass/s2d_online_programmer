@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Program Editor</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <script id="initial-program" type="application/json">{{ initial_program | safe }}</script>
+  <script id="initial-step-template" type="application/json">{{ initial_step_template | safe }}</script>
+
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Smart Assy Guidence System Program editor</p>
+      <h1>Program Editor</h1>
+      <p class="subtitle">Create, edit, insert, delete, and save Recipe data</p>
+    </div>
+    <div class="topbar-actions">
+      <button id="preview-steps-btn" class="secondary">Preview Steps</button>
+      <button id="save-program-btn" class="primary">Save Program</button>
+      <a id="download-btn" class="secondary" href="/download">Download JSON</a>
+      <a id="download-recipe-btn" class="secondary" href="/download-recipe">Download Recipe</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="card">
+        <h2>Program</h2>
+        <label>
+          Part Name
+          <input id="partname" type="text" />
+        </label>
+        <label>
+          Load Program From Server
+          <select id="program-select">
+            <option value="">-- Select Program --</option>
+          </select>
+        </label>
+        <label class="checkbox-row"><input id="enable_mes" type="checkbox" /> Enable MES</label>
+        <label class="checkbox-row"><input id="enable_ftp" type="checkbox" /> Enable FTP</label>
+        <button id="apply-program-btn" class="secondary full">Apply Program Info</button>
+      </section>
+
+      <section class="card">
+        <h2>Steps</h2>
+        <div class="step-nav">
+          <label>
+            Step Number
+            <input id="step-spinner" type="number" min="1" value="1" />
+          </label>
+          <div class="inline-actions">
+            <button id="insert-step-btn" class="secondary">Insert After</button>
+            <button id="add-step-btn" class="secondary">Add Step</button>
+          </div>
+          <div class="inline-actions">
+            <button id="delete-step-btn" class="danger">Delete Step</button>
+            <button id="clone-step-btn" class="secondary">Duplicate</button>
+          </div>
+        </div>
+        <input id="upload-file" type="file" accept="application/json" />
+        <input id="upload-zip-file" type="file" accept=".zip,application/zip" />
+        <ul id="step-list" class="step-list"></ul>
+      </section>
+    </aside>
+
+    <section class="editor">
+      <div class="editor-head">
+        <div>
+          <h2 id="step-title">Step 1</h2>
+          <p id="mode-summary" class="mode-summary"></p>
+        </div>
+        <div class="editor-actions">
+          <button id="save-step-btn" class="primary">Save Step</button>
+        </div>
+      </div>
+
+      <div class="mode-cards">
+        <div class="mode-card barcode">
+          <h3>Barcode</h3>
+          <p>enable_barcode</p>
+        </div>
+        <div class="mode-card ack">
+          <h3>Acknowledgement</h3>
+          <p>request_ack</p>
+        </div>
+        <div class="mode-card fastening">
+          <h3>Fastening</h3>
+          <p>enable_fastening</p>
+        </div>
+      </div>
+
+      <div id="form-container" class="form-container"></div>
+    </section>
+  </main>
+
+  <template id="section-template">
+    <section class="section">
+      <h3></h3>
+      <div class="field-grid"></div>
+    </section>
+  </template>
+
+  <script>
+    window.INITIAL_PROGRAM = JSON.parse(document.getElementById('initial-program').textContent);
+    window.INITIAL_STEP_TEMPLATE = JSON.parse(document.getElementById('initial-step-template').textContent);
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

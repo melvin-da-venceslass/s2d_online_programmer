@@ -1,0 +1,43 @@
+{
+    "partname": "IBE333333_A",
+    "enable_mes": false,
+    "enable_ftp": false,
+    "steps": [
+        {
+            "enable_barcode": true,
+            "bc_title": "",
+            "bc_parent": true,
+            "bc_child": false,
+            "whatloc_enabled": false,
+            "check_short_workstation": "",
+            "check_part_number": "",
+            "check_ref_designator": "NA",
+            "enable_barcode_mes": true,
+            "ack_title": "",
+            "request_ack": false,
+            "enable_ack_mes": false,
+            "enable_fastening": false,
+            "step_no": 1,
+            "target_preset": "",
+            "target_torque": "",
+            "target_angle": "",
+            "target_min_angle": "",
+            "target_max_angle": "",
+            "target_tolerance": "",
+            "target_rpm": "",
+            "TC_AM": true,
+            "AC_TM": false,
+            "screw_info": "",
+            "remarks": "",
+            "mes_enable_assy": false,
+            "snug_torque": "",
+            "free_fastening_angle": "",
+            "soft_start": "",
+            "free_fastening_speed": "",
+            "torque_rising_rate": "",
+            "seating_point": "",
+            "ramp_up_speed": "",
+            "torque_compensation": ""
+        }
+    ]
+}
