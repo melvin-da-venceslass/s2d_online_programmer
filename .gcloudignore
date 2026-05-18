@@ -1,0 +1,11 @@
+# Cloud SDK ignore rules for source uploads
+.gcloudignore
+.git/
+.gitignore
+.vscode/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
