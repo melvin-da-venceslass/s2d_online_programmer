@@ -55,7 +55,7 @@ const state = {
   dirty: false,
   saving: false,
   lastSavedSnapshot: null,
-  retainImageMode: 'selected',
+  retainImageMode: '',
   lastSelectedImage: '',
   lastSavedImage: '',
   stepClipboard: null,
@@ -71,6 +71,8 @@ const els = {
   previewStepsBtn: document.getElementById('preview-steps-btn'),
   saveProgramBtn: document.getElementById('save-program-btn'),
   downloadBtn: document.getElementById('download-btn'),
+  downloadPdfBtn: document.getElementById('download-pdf-btn'),
+  downloadWiBtn: document.getElementById('download-wi-btn'),
   stepSpinner: document.getElementById('step-spinner'),
   insertStepBtn: document.getElementById('insert-step-btn'),
   addStepBtn: document.getElementById('add-step-btn'),
@@ -303,9 +305,16 @@ function normalizeStepForIndex(step, index) {
 
 function snapshotStepForClipboard(index) {
   if (index === state.currentIndex && state.dirty) {
-    return collectFormStep();
+    return removeStepImageData(collectFormStep());
   }
-  return deepClone(state.program.steps[index]);
+  return removeStepImageData(deepClone(state.program.steps[index]));
+}
+
+function removeStepImageData(step) {
+  const sanitized = deepClone(step);
+  // Keep copy/paste focused on parameters only and never carry image payloads.
+  sanitized.upload_image = '';
+  return sanitized;
 }
 
 function copyStepParameters(index) {
@@ -328,7 +337,15 @@ function pasteStepParameters(index) {
     state.program.steps[state.currentIndex] = collectFormStep();
   }
 
-  state.program.steps[index] = normalizeStepForIndex(state.stepClipboard.step, index);
+  const targetStep =
+    index === state.currentIndex && state.dirty
+      ? collectFormStep()
+      : deepClone(state.program.steps[index]);
+
+  const pastedStep = normalizeStepForIndex(state.stepClipboard.step, index);
+  pastedStep.upload_image = String(targetStep.upload_image || '').trim();
+
+  state.program.steps[index] = pastedStep;
   state.currentIndex = index;
   state.dirty = true;
   renderEditor();
@@ -507,7 +524,7 @@ function createCommonImageSection(step, index) {
   retainOriginalLabel.className = 'checkbox-row';
   const retainOriginalInput = document.createElement('input');
   retainOriginalInput.type = 'checkbox';
-  retainOriginalInput.checked = false;
+  retainOriginalInput.checked = state.retainImageMode === 'selected';
   const retainOriginalText = document.createElement('span');
   retainOriginalText.textContent = 'Retain original image';
   retainOriginalLabel.append(retainOriginalInput, retainOriginalText);
@@ -516,7 +533,7 @@ function createCommonImageSection(step, index) {
   retainSavedLabel.className = 'checkbox-row';
   const retainSavedInput = document.createElement('input');
   retainSavedInput.type = 'checkbox';
-  retainSavedInput.checked = false;
+  retainSavedInput.checked = state.retainImageMode === 'saved';
   const retainSavedText = document.createElement('span');
   retainSavedText.textContent = 'Retain last edited image';
   retainSavedLabel.append(retainSavedInput, retainSavedText);
@@ -1316,6 +1333,50 @@ function bindEvents() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${sanitizeFilename(payload.partname)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  els.downloadPdfBtn.addEventListener('click', async () => {
+    const payload = buildDownloadPayload();
+    const response = await fetch('/download-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      alert('PDF export failed.');
+      return;
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sanitizeFilename(payload.partname)}_steps.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  els.downloadWiBtn.addEventListener('click', async () => {
+    const payload = buildDownloadPayload();
+    const response = await fetch('/download-wi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      alert('WI PDF export failed.');
+      return;
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sanitizeFilename(payload.partname)}_wi.pdf`;
     document.body.appendChild(a);
     a.click();
     a.remove();

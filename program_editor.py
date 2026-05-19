@@ -14,6 +14,11 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "template.json"
@@ -187,6 +192,323 @@ def decode_image_data_url(data_url: str) -> Optional[bytes]:
         return base64.b64decode(encoded)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image payload in upload_image")
+
+
+def resolve_step_image_bytes(program: Dict[str, Any], step: Dict[str, Any]) -> Optional[bytes]:
+    image_value = step.get("upload_image", "")
+    if not isinstance(image_value, str) or not image_value.strip():
+        return None
+
+    decoded = decode_image_data_url(image_value)
+    if decoded is not None:
+        return decoded
+
+    parsed = urlparse(image_value)
+    image_path = parsed.path if parsed.path else image_value
+    if image_path.startswith("/"):
+        source_path = BASE_DIR / image_path.lstrip("/")
+    else:
+        source_path = BASE_DIR / image_path
+
+    if source_path.exists() and source_path.is_file():
+        return source_path.read_bytes()
+
+    part = sanitize_filename(program.get("partname", "program"))
+    fallback_path = PROGRAMS_DIR / part / "imgs" / Path(image_path).name
+    if fallback_path.exists() and fallback_path.is_file():
+        return fallback_path.read_bytes()
+    return None
+
+
+def prettify_step_key(key: str) -> str:
+    acronyms = {"ac", "am", "bc", "ftp", "mes", "rpm", "tc"}
+    words = []
+    for part in str(key).split("_"):
+        lowered = part.lower()
+        if lowered in acronyms:
+            words.append(lowered.upper())
+        else:
+            words.append(lowered.capitalize())
+    return " ".join(words)
+
+
+def mode_label(step: Dict[str, Any]) -> str:
+    if step.get("enable_barcode"):
+        return "Barcode"
+    if step.get("request_ack"):
+        return "Acknowledgement"
+    if step.get("enable_fastening"):
+        return "Fastening"
+    return "No mode selected"
+
+
+def mode_pdf_style(mode: str) -> Dict[str, str]:
+    styles: Dict[str, Dict[str, str]] = {
+        "Barcode": {
+            "card_border": "#b9c9f0",
+            "step_fill": "#f3f7ff",
+            "header_fill": "#edf3ff",
+            "accent": "#1f4fb8",
+            "badge_fill": "#dce8ff",
+            "badge_text": "#173f96",
+        },
+        "Acknowledgement": {
+            "card_border": "#c9c0ea",
+            "step_fill": "#f7f4ff",
+            "header_fill": "#f3efff",
+            "accent": "#5a3db0",
+            "badge_fill": "#e8defd",
+            "badge_text": "#4b3197",
+        },
+        "Fastening": {
+            "card_border": "#b8dfd8",
+            "step_fill": "#f1fbf8",
+            "header_fill": "#ebfaf6",
+            "accent": "#1d7d69",
+            "badge_fill": "#d8f2ea",
+            "badge_text": "#166453",
+        },
+    }
+    return styles.get(
+        mode,
+        {
+            "card_border": "#cbd2df",
+            "step_fill": "#f6f8fc",
+            "header_fill": "#f6f8fc",
+            "accent": "#10233f",
+            "badge_fill": "#e8edf6",
+            "badge_text": "#3e506e",
+        },
+    )
+
+
+def visible_step_entries(step: Dict[str, Any], include_checkbox_fields: bool = True) -> List[tuple[str, str]]:
+    entries: List[tuple[str, str]] = []
+    for key, value in step.items():
+        if key in {"upload_image", "step_no"}:
+            continue
+        if value in ("", None):
+            continue
+        if not include_checkbox_fields and isinstance(value, bool):
+            continue
+        if isinstance(value, bool):
+            display = "Yes" if value else "No"
+        else:
+            display = str(value)
+        entries.append((prettify_step_key(key), display))
+    return entries
+
+
+def wrap_pdf_text(text: str, font_name: str, font_size: float, max_width: float) -> List[str]:
+    raw = str(text or "")
+    if not raw:
+        return [""]
+
+    lines: List[str] = []
+    for paragraph in raw.splitlines() or [raw]:
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+
+        current = words[0]
+        for word in words[1:]:
+            trial = f"{current} {word}"
+            if stringWidth(trial, font_name, font_size) <= max_width:
+                current = trial
+                continue
+            lines.append(current)
+            if stringWidth(word, font_name, font_size) <= max_width:
+                current = word
+                continue
+
+            fragment = ""
+            for char in word:
+                trial_fragment = f"{fragment}{char}"
+                if fragment and stringWidth(trial_fragment, font_name, font_size) > max_width:
+                    lines.append(fragment)
+                    fragment = char
+                else:
+                    fragment = trial_fragment
+            current = fragment
+
+        lines.append(current)
+    return lines or [""]
+
+
+def draw_step_pdf_block(
+    pdf: canvas.Canvas,
+    program: Dict[str, Any],
+    step: Dict[str, Any],
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    include_checkbox_fields: bool = True,
+) -> None:
+    mode = mode_label(step)
+    style = mode_pdf_style(mode)
+
+    pdf.setStrokeColor(colors.HexColor(style["card_border"]))
+    pdf.setFillColor(colors.HexColor(style["step_fill"]))
+    pdf.roundRect(x, y, width, height, 10, stroke=1, fill=1)
+
+    # Top accent panel gives each mode a distinct visual identity.
+    header_h = 38
+    pdf.setFillColor(colors.HexColor(style["header_fill"]))
+    pdf.roundRect(x + 1, y + height - header_h - 1, width - 2, header_h, 8, stroke=0, fill=1)
+
+    padding = 16
+    image_area_width = width * 0.75
+    gutter = 14
+    image_area_x = x + width - image_area_width
+    image_x = image_area_x + (padding * 0.35)
+    image_y = y + padding
+    image_w = image_area_width - (padding * 0.9)
+    image_h = height - (padding * 2)
+    text_x = x + padding
+    text_y_top = y + height - padding
+    text_w = image_area_x - gutter - text_x
+
+    # Keep a unified step background and only subtle structural separators.
+    pdf.setStrokeColor(colors.HexColor(style["card_border"]))
+    pdf.setLineWidth(0.8)
+    pdf.roundRect(image_x - 3, image_y - 3, image_w + 6, image_h + 6, 6, stroke=1, fill=0)
+
+    pdf.setFont("Helvetica-Bold", 13.5)
+    pdf.setFillColor(colors.HexColor(style["accent"]))
+    pdf.drawString(x + padding, text_y_top, f"Step {step.get('step_no', '')}")
+
+    mode_text = mode
+    badge_w = max(66, stringWidth(mode_text, "Helvetica-Bold", 8.7) + 16)
+    badge_h = 14
+    badge_y = text_y_top - 20
+    pdf.setFillColor(colors.HexColor(style["badge_fill"]))
+    pdf.roundRect(x + padding, badge_y, badge_w, badge_h, 4, stroke=0, fill=1)
+    pdf.setFillColor(colors.HexColor(style["badge_text"]))
+    pdf.setFont("Helvetica-Bold", 8.7)
+    pdf.drawString(x + padding + 8, badge_y + 4, mode_text)
+
+    current_y = text_y_top - 34
+
+    image_bytes = resolve_step_image_bytes(program, step)
+    if image_bytes:
+        try:
+            reader = ImageReader(io.BytesIO(image_bytes))
+            img_w, img_h = reader.getSize()
+            scale = min(image_w / img_w, image_h / img_h)
+            draw_w = img_w * scale
+            draw_h = img_h * scale
+            draw_x = image_x + (image_w - draw_w) / 2
+            draw_y = image_y + (image_h - draw_h) / 2
+            pdf.drawImage(reader, draw_x, draw_y, draw_w, draw_h, preserveAspectRatio=True, mask="auto")
+        except Exception:
+            image_bytes = None
+
+    if not image_bytes:
+        pdf.setStrokeColor(colors.HexColor("#d7dce5"))
+        pdf.setFillColor(colors.HexColor("#f5f7fb"))
+        pdf.rect(image_x, image_y, image_w, image_h, stroke=1, fill=1)
+        pdf.setFillColor(colors.HexColor("#77839a"))
+        pdf.setFont("Helvetica", 11)
+        pdf.drawCentredString(image_x + (image_w / 2), image_y + (image_h / 2), "No image available")
+
+    value_color = colors.HexColor("#4a5973")
+    key_color = colors.HexColor(style["accent"])
+    line_height = 10.5
+    row_gap = 7
+
+    for label, value in visible_step_entries(step, include_checkbox_fields=include_checkbox_fields):
+        row_x = text_x + 3
+        label_text = f"{label}:"
+        label_font = "Helvetica-Bold"
+        label_size = 8.6
+        value_font = "Helvetica"
+        value_size = 8.4
+        label_width = stringWidth(label_text, label_font, label_size)
+        value_max_width = max(36, text_w - 10 - label_width)
+        value_lines = wrap_pdf_text(value, value_font, value_size, value_max_width)
+        line_count = max(1, len(value_lines))
+        block_height = (line_count * line_height) + row_gap
+        if current_y - block_height < y + padding:
+            break
+
+        pdf.setFillColor(key_color)
+        pdf.setFont(label_font, label_size)
+        pdf.drawString(row_x, current_y, label_text)
+
+        pdf.setFillColor(value_color)
+        pdf.setFont(value_font, value_size)
+        if value_lines:
+            pdf.drawString(row_x + label_width + 4, current_y, value_lines[0])
+            for line in value_lines[1:]:
+                current_y -= line_height
+                pdf.drawString(row_x + label_width + 4, current_y, line)
+        else:
+            pdf.drawString(row_x + label_width + 4, current_y, "-")
+
+        current_y -= line_height
+        current_y -= row_gap
+
+
+def build_steps_pdf(program: Dict[str, Any], include_checkbox_fields: bool = True) -> bytes:
+    normalized_program = normalize_program(program)
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    page_width, page_height = A4
+    margin = 16
+    gap = 14
+    header_height = 26
+    usable_height = page_height - (margin * 2) - header_height - gap
+    block_height = usable_height / 2
+    block_width = page_width - (margin * 2)
+
+    steps = normalized_program.get("steps", [])
+    if not steps:
+        pdf.setFillColor(colors.HexColor("#f4f7fc"))
+        pdf.rect(0, 0, page_width, page_height, stroke=0, fill=1)
+        pdf.setFillColor(colors.HexColor("#10233f"))
+        pdf.setFont("Helvetica-Bold", 18)
+        pdf.drawString(margin, page_height - margin - 10, normalized_program.get("partname") or "Program")
+        pdf.setFillColor(colors.HexColor("#4b5b76"))
+        pdf.setFont("Helvetica", 11)
+        pdf.drawString(margin, page_height - margin - 32, "No steps available.")
+        pdf.save()
+        return buffer.getvalue()
+
+    for index, step in enumerate(steps):
+        slot = index % 2
+        if slot == 0:
+            pdf.setFillColor(colors.HexColor("#f4f7fc"))
+            pdf.rect(0, 0, page_width, page_height, stroke=0, fill=1)
+            pdf.setFillColor(colors.white)
+            pdf.roundRect(margin, page_height - margin - 24, page_width - (margin * 2), 20, 6, stroke=0, fill=1)
+            pdf.setFont("Helvetica-Bold", 14)
+            pdf.setFillColor(colors.HexColor("#10233f"))
+            pdf.drawString(margin + 8, page_height - margin - 10, normalized_program.get("partname") or "Program")
+            pdf.setFont("Helvetica", 9.5)
+            pdf.setFillColor(colors.HexColor("#4b5b76"))
+            pdf.drawRightString(page_width - margin - 8, page_height - margin - 10, f"Work Instruction Sheet {index // 2 + 1}")
+
+        y = page_height - margin - header_height - block_height if slot == 0 else margin
+        if slot == 0:
+            y += gap
+        draw_step_pdf_block(
+            pdf,
+            normalized_program,
+            step,
+            margin,
+            y,
+            block_width,
+            block_height - (gap if slot == 0 else 0),
+            include_checkbox_fields=include_checkbox_fields,
+        )
+
+        if slot == 1 or index == len(steps) - 1:
+            pdf.showPage()
+
+    pdf.save()
+    return buffer.getvalue()
 
 
 def persist_program_locked() -> None:
@@ -461,12 +783,14 @@ def download_recipe_zip():
         program = copy.deepcopy(CURRENT_DATA)
 
     part = sanitize_filename(program.get("partname"), fallback="program")
-    image_dir = PROGRAMS_DIR / part
+    recipe_dir = PROGRAMS_DIR / part
+    image_dir = recipe_dir / "imgs"
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         # Keep a stable recipe layout: <part>.json and <part>/ image folder.
         zf.writestr(f"{part}/", "")
+        zf.writestr(f"{part}/imgs/", "")
         zf.writestr(f"{part}.json", json.dumps(program, indent=4))
 
         added_arc = set()
@@ -488,7 +812,8 @@ def download_recipe_zip():
             source_path = BASE_DIR / image_path.lstrip("/")
             if not source_path.exists() or not source_path.is_file():
                 continue
-            arc = str(Path(part) / source_path.name)
+            # Always place recipe images inside <part>/imgs in the ZIP.
+            arc = str(Path(part) / "imgs" / source_path.name)
             if arc in added_arc:
                 continue
             zf.write(source_path, arcname=arc)
@@ -500,6 +825,48 @@ def download_recipe_zip():
         content=mem.getvalue(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+    )
+
+
+@app.post("/download-pdf")
+async def download_steps_pdf(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload for PDF export") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid program payload for PDF export")
+
+    program = normalize_program(payload)
+    pdf_bytes = build_steps_pdf(program)
+    part = sanitize_filename(program.get("partname"), fallback="program")
+    filename = f"{part}_steps.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/download-wi")
+async def download_steps_wi_pdf(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload for WI PDF export") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid program payload for WI PDF export")
+
+    program = normalize_program(payload)
+    pdf_bytes = build_steps_pdf(program, include_checkbox_fields=False)
+    part = sanitize_filename(program.get("partname"), fallback="program")
+    filename = f"{part}_wi.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
