@@ -12,7 +12,7 @@ body.preview-body {
 }
 
 .preview-card {
-  max-width: 980px;
+  max-width: 1280px;
   margin: 0 auto;
   background: rgba(255, 255, 255, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.9);
@@ -20,6 +20,9 @@ body.preview-body {
   padding: 0.8rem;
   padding-bottom: 1.1rem;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 140px);
 }
 
 .preview-header {
@@ -27,7 +30,19 @@ body.preview-body {
   justify-content: space-between;
   align-items: baseline;
   gap: 0.75rem;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.75rem;
+  order: 1;
+  flex: 0 0 auto;
+}
+
+.preview-content-area {
+  display: grid;
+  grid-template-columns: 30% 70%;
+  gap: 1rem;
+  order: 2;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 .preview-image-wrap {
@@ -35,7 +50,10 @@ body.preview-body {
   border-radius: 12px;
   padding: 0.45rem;
   background: #fff;
-  margin-bottom: 0.7rem;
+  order: 2;
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 0;
 }
 
 .preview-image-wrap.hidden {
@@ -44,7 +62,8 @@ body.preview-body {
 
 #preview-image {
   width: 100%;
-  max-height: 360px;
+  height: 100%;
+  max-height: 600px;
   object-fit: contain;
   border-radius: 10px;
   background: #fff;
@@ -52,8 +71,14 @@ body.preview-body {
 
 .preview-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 0.5rem 0.65rem;
+  order: 2;
+  grid-column: 1;
+  grid-row: 1;
+  max-height: 600px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
 }
 
 .preview-field {
@@ -78,15 +103,15 @@ body.preview-body {
 }
 
 .preview-nav {
-  margin-top: 0.8rem;
+  order: 3;
+  flex: 0 0 auto;
+  margin-top: 0.75rem;
   display: flex;
   gap: 0.5rem;
   align-items: center;
   justify-content: center;
   flex-wrap: nowrap;
-  position: sticky;
-  bottom: 0.35rem;
-  z-index: 5;
+  position: static;
   padding: 0.45rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -104,8 +129,16 @@ body.preview-body {
   min-width: 110px;
 }
 
-@media (max-width: 800px) {
-  .preview-fields {
+@media (max-width: 900px) {
+  .preview-content-area {
     grid-template-columns: 1fr;
+  }
+  .preview-fields {
+    grid-column: 1;
+    max-height: 300px;
+  }
+  .preview-image-wrap {
+    grid-column: 1;
+    order: 3;
   }
 }
