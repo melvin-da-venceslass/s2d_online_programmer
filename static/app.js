@@ -85,9 +85,26 @@ const els = {
   modeSummary: document.getElementById('mode-summary'),
   saveStepBtn: document.getElementById('save-step-btn'),
   formContainer: document.getElementById('form-container'),
+  editorPane: document.querySelector('.editor'),
   modeCardsWrap: document.querySelector('.mode-cards'),
   modeCards: Array.from(document.querySelectorAll('.mode-card')),
 };
+
+function applyEditorModeTheme(step) {
+  if (!els.editorPane) return;
+  els.editorPane.classList.remove('mode-barcode', 'mode-ack', 'mode-fastening', 'mode-none');
+
+  const activeMode = step ? getActiveMode(step) : null;
+  if (activeMode === 'Barcode') {
+    els.editorPane.classList.add('mode-barcode');
+  } else if (activeMode === 'Acknowledgement') {
+    els.editorPane.classList.add('mode-ack');
+  } else if (activeMode === 'Fastening') {
+    els.editorPane.classList.add('mode-fastening');
+  } else {
+    els.editorPane.classList.add('mode-none');
+  }
+}
 
 function hasSelectedStep() {
   return state.currentIndex >= 0 && state.currentIndex < state.program.steps.length;
@@ -1040,7 +1057,7 @@ function renderStepForm() {
 
     if (otherFields.length > 0) {
       const grid = document.createElement('div');
-      grid.className = 'field-grid';
+      grid.className = section.title === 'Fastening' ? 'field-grid field-grid-fastening' : 'field-grid';
       otherFields.forEach((field) => {
         grid.appendChild(createField(field, step[field.key], state.currentIndex + 1));
       });
@@ -1054,6 +1071,7 @@ function renderStepForm() {
 
 function renderEditor() {
   if (!hasSelectedStep()) {
+    applyEditorModeTheme(null);
     els.stepTitle.textContent = 'No step selected';
     els.modeSummary.textContent = '';
     els.stepSpinner.value = '';
@@ -1067,6 +1085,7 @@ function renderEditor() {
   }
 
   const step = state.program.steps[state.currentIndex];
+  applyEditorModeTheme(step);
   els.stepTitle.textContent = `Step ${step.step_no}`;
   els.modeSummary.textContent = modeLabels(step);
   els.stepSpinner.value = step.step_no;

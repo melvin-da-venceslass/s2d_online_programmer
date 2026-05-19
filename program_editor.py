@@ -358,7 +358,7 @@ def draw_step_pdf_block(
     pdf.setFillColor(colors.HexColor(style["header_fill"]))
     pdf.roundRect(x + 1, y + height - header_h - 1, width - 2, header_h, 8, stroke=0, fill=1)
 
-    padding = 16
+    padding = 18
     image_area_width = width * 0.75
     gutter = 14
     image_area_x = x + width - image_area_width
@@ -367,7 +367,7 @@ def draw_step_pdf_block(
     image_w = image_area_width - (padding * 0.9)
     image_h = height - (padding * 2)
     text_x = x + padding
-    text_y_top = y + height - padding
+    text_y_top = y + height - 26
     text_w = image_area_x - gutter - text_x
 
     # Keep a unified step background and only subtle structural separators.
@@ -382,14 +382,14 @@ def draw_step_pdf_block(
     mode_text = mode
     badge_w = max(66, stringWidth(mode_text, "Helvetica-Bold", 8.7) + 16)
     badge_h = 14
-    badge_y = text_y_top - 20
+    badge_y = text_y_top - 24
     pdf.setFillColor(colors.HexColor(style["badge_fill"]))
     pdf.roundRect(x + padding, badge_y, badge_w, badge_h, 4, stroke=0, fill=1)
     pdf.setFillColor(colors.HexColor(style["badge_text"]))
     pdf.setFont("Helvetica-Bold", 8.7)
     pdf.drawString(x + padding + 8, badge_y + 4, mode_text)
 
-    current_y = text_y_top - 34
+    current_y = text_y_top - 40
 
     image_bytes = resolve_step_image_bytes(program, step)
     if image_bytes:
