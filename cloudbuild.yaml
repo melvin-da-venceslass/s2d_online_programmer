@@ -2,9 +2,9 @@ substitutions:
   _SERVICE_NAME: program-editor
   _REGION: us-central1
   _AR_REPO: cloud-run
-  _GCS_BUCKET: ""
+  _GCS_BUCKET: "app_release_bucket"   # ← replace with your bucket name
   _GCS_PREFIX: program-editor
-  _RUN_SERVICE_ACCOUNT: ""
+  _RUN_SERVICE_ACCOUNT: "program-editor@mviis-docker.iam.gserviceaccount.com"
 
 steps:
   - name: gcr.io/cloud-builders/gcloud
@@ -47,7 +47,7 @@ steps:
       - --service-account
       - ${_RUN_SERVICE_ACCOUNT}
       - --set-env-vars
-      - GCS_BUCKET_NAME=${_GCS_BUCKET},GCS_PREFIX=${_GCS_PREFIX},GCS_KEY_FILE=
+      - GCS_BUCKET_NAME=${_GCS_BUCKET},GCS_PREFIX=${_GCS_PREFIX}
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:$COMMIT_SHA
