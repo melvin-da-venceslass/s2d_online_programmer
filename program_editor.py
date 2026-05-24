@@ -9,7 +9,7 @@ import io
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -205,6 +205,7 @@ def read_program_asset_bytes(relative_path: str) -> Optional[bytes]:
 
     if gcs_enabled():
         candidates = [rel]
+        # Backward-compatible read support for older objects written under programs/.
         if not rel.startswith("programs/"):
             candidates.append(f"programs/{rel}")
         for candidate in candidates:
@@ -225,10 +226,7 @@ def _list_local_program_names() -> List[str]:
 
 def refresh_program_index_locked() -> List[str]:
     if gcs_enabled():
-        program_names = scan_program_names_from_gcs()
-        index_payload = json.dumps(program_names, indent=4)
-        upload_bytes_to_gcs("program-index.json", index_payload.encode("utf-8"), "application/json")
-        return program_names
+        return scan_program_names_from_gcs()
 
     program_names = _list_local_program_names()
     index_payload = json.dumps(program_names, indent=4)
@@ -237,24 +235,8 @@ def refresh_program_index_locked() -> List[str]:
 
 
 def load_program_index_from_gcs() -> List[str]:
-    bucket = get_gcs_bucket()
-    if bucket is None:
-        return []
-
-    blob = bucket.blob(gcs_blob_name("program-index.json"))
-    if not blob.exists():
-        return []
-
-    try:
-        payload = json.loads(blob.download_as_text())
-    except Exception:
-        return []
-
-    if not isinstance(payload, list):
-        return []
-
-    names = [Path(str(name)).name for name in payload if str(name).lower().endswith(".json")]
-    return sorted(set(names))
+    # Keep compatibility with callers, but do not use bucket index files.
+    return []
 
 
 def scan_program_names_from_gcs() -> List[str]:
@@ -265,9 +247,11 @@ def scan_program_names_from_gcs() -> List[str]:
     prefix = f"{GCS_PREFIX.rstrip('/')}/" if GCS_PREFIX else ""
     names: List[str] = []
     for blob in bucket.list_blobs(prefix=prefix):
-        if not blob.name.endswith(".json") or blob.name.endswith("program-index.json"):
+        if not blob.name.endswith(".json"):
             continue
         tail = blob.name[len(prefix) :] if prefix else blob.name
+        if "/" in tail:
+            continue
         names.append(Path(tail).name)
     return sorted(set(names))
 
@@ -297,7 +281,7 @@ def sync_program_images_from_gcs(part: str) -> None:
 
     image_dir = PROGRAMS_DIR / part / "imgs"
     image_dir.mkdir(parents=True, exist_ok=True)
-    prefix = gcs_blob_name(f"programs/{part}/imgs/")
+    prefix = gcs_blob_name(f"{part}/imgs/")
     for blob in bucket.list_blobs(prefix=prefix):
         if blob.name.endswith("/"):
             continue
@@ -317,7 +301,7 @@ def sync_program_to_gcs(program: Dict[str, Any], include_json: bool = True) -> N
     image_dir = PROGRAMS_DIR / part / "imgs"
 
     if include_json and json_path.exists():
-        upload_bytes_to_gcs(f"programs/{json_path.name}", json_path.read_bytes(), "application/json")
+        upload_bytes_to_gcs(json_path.name, json_path.read_bytes(), "application/json")
 
     expected_images: set[str] = set()
     if image_dir.exists() and image_dir.is_dir():
@@ -326,7 +310,7 @@ def sync_program_to_gcs(program: Dict[str, Any], include_json: bool = True) -> N
                 continue
             expected_images.add(fp.name)
             upload_bytes_to_gcs(
-                f"programs/{part}/imgs/{fp.name}",
+                f"{part}/imgs/{fp.name}",
                 fp.read_bytes(),
                 "image/png",
             )
@@ -334,7 +318,7 @@ def sync_program_to_gcs(program: Dict[str, Any], include_json: bool = True) -> N
     bucket = get_gcs_bucket()
     if bucket is None:
         return
-    prefix = gcs_blob_name(f"programs/{part}/imgs/")
+    prefix = gcs_blob_name(f"{part}/imgs/")
     for blob in bucket.list_blobs(prefix=prefix):
         if blob.name.endswith("/"):
             continue
@@ -359,7 +343,7 @@ def sync_program_to_gcs_async(program: Dict[str, Any]) -> None:
 def program_storage_path(program: Dict[str, Any]) -> str:
     part = sanitize_filename(program.get("partname", "program"), fallback="program")
     if gcs_enabled():
-        return f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name(f'programs/{part}.json')}"
+        return f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name(f'{part}.json')}"
     return str((PROGRAMS_DIR / f"{part}.json").resolve())
 
 
@@ -465,6 +449,7 @@ def resolve_step_image_bytes(program: Dict[str, Any], step: Dict[str, Any]) -> O
 
     gcs_candidate = image_path.lstrip("/")
     gcs_candidates = [gcs_candidate]
+    # Backward-compatible read support for older objects written under programs/.
     if gcs_candidate.startswith("programs/"):
         gcs_candidates.append(gcs_candidate.removeprefix("programs/"))
     else:
@@ -776,7 +761,34 @@ def build_steps_pdf(program: Dict[str, Any], include_checkbox_fields: bool = Tru
 def persist_program_locked() -> None:
     part = sanitize_filename(CURRENT_DATA.get("partname", "program"))
     if gcs_enabled():
-        persist_program_snapshot_to_gcs(CURRENT_DATA)
+        # Keep step saves responsive in Cloud Run by avoiding bucket-wide scans.
+        active_program = copy.deepcopy(CURRENT_DATA)
+
+        for step in active_program.get("steps", []):
+            step_no = int(step.get("step_no", 0) or 0)
+            if step_no <= 0:
+                continue
+
+            image_value = step.get("upload_image", "")
+            if not isinstance(image_value, str) or not image_value:
+                step["upload_image"] = ""
+                continue
+
+            decoded = decode_image_data_url(image_value)
+            if decoded is not None:
+                image_name = f"{step_no}.png"
+                upload_bytes_to_gcs(
+                    f"{part}/imgs/{image_name}",
+                    decoded,
+                    "image/png",
+                )
+                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
+
+        payload = json.dumps(active_program, indent=4).encode("utf-8")
+        upload_bytes_to_gcs(f"{part}.json", payload, "application/json")
+        CURRENT_DATA.clear()
+        CURRENT_DATA.update(active_program)
+        announce_program_in_gcs_index(active_program)
         return
 
     json_path = PROGRAMS_DIR / f"{part}.json"
@@ -847,9 +859,6 @@ def persist_program_locked() -> None:
 
     json_path.write_text(json.dumps(CURRENT_DATA, indent=4), encoding="utf-8")
     refresh_program_index_locked()
-    if gcs_enabled():
-        upload_bytes_to_gcs(f"programs/{part}.json", json_path.read_bytes(), "application/json")
-        sync_program_to_gcs_async(CURRENT_DATA)
 
 
 def persist_program_snapshot_to_gcs(program: Dict[str, Any]) -> None:
@@ -860,7 +869,7 @@ def persist_program_snapshot_to_gcs(program: Dict[str, Any]) -> None:
     part = sanitize_filename(snapshot.get("partname", "program"))
     program_name = f"{part}.json"
     payload = json.dumps(snapshot, indent=4).encode("utf-8")
-    upload_bytes_to_gcs(f"programs/{program_name}", payload, "application/json")
+    upload_bytes_to_gcs(program_name, payload, "application/json")
 
     active_image_names = set()
     for step in snapshot.get("steps", []):
@@ -880,7 +889,7 @@ def persist_program_snapshot_to_gcs(program: Dict[str, Any]) -> None:
             continue
 
         upload_bytes_to_gcs(
-            f"programs/{part}/imgs/{image_name}",
+            f"{part}/imgs/{image_name}",
             image_bytes,
             "image/png",
         )
@@ -889,31 +898,17 @@ def persist_program_snapshot_to_gcs(program: Dict[str, Any]) -> None:
 
     bucket = get_gcs_bucket()
     if bucket is not None:
-        prefix = gcs_blob_name(f"programs/{part}/imgs/")
+        prefix = gcs_blob_name(f"{part}/imgs/")
         for blob in bucket.list_blobs(prefix=prefix):
             if blob.name.endswith("/"):
                 continue
             if Path(blob.name).name not in active_image_names:
                 blob.delete()
 
-    existing_names = set(load_program_index_from_gcs())
-    existing_names.add(program_name)
-    index_payload = json.dumps(sorted(existing_names), indent=4).encode("utf-8")
-    upload_bytes_to_gcs("program-index.json", index_payload, "application/json")
-
 
 def announce_program_in_gcs_index(program: Dict[str, Any]) -> None:
-    if not gcs_enabled():
-        return
-
-    part = sanitize_filename(program.get("partname", "program"))
-    program_name = f"{part}.json"
-    existing_names = set(load_program_index_from_gcs())
-    if program_name in existing_names:
-        return
-    existing_names.add(program_name)
-    index_payload = json.dumps(sorted(existing_names), indent=4).encode("utf-8")
-    upload_bytes_to_gcs("program-index.json", index_payload, "application/json")
+    # No-op by design: do not create index/metadata files in bucket prefix.
+    _ = program
 
 
 def parse_program_json_bytes(raw: bytes, source_label: str) -> Dict[str, Any]:
@@ -945,57 +940,59 @@ def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON inside ZIP: {exc}") from exc
 
-    image_members: Dict[int, str] = {}
+    image_members: Dict[int, Tuple[str, str]] = {}
     for info in archive.infolist():
         if info.is_dir():
             continue
         rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
         if not rel:
             continue
-        if not rel.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+        if not rel.lower().endswith((".png", ".jpg", ".jpeg")):
             continue
         name = Path(rel).name
+        suffix = Path(name).suffix.lower()
+        ext = "jpg" if suffix == ".jpeg" else suffix.lstrip(".")
+        if ext not in {"png", "jpg"}:
+            continue
         stem = Path(name).stem
         if stem.isdigit():
-            image_members[int(stem)] = rel
+            image_members[int(stem)] = (rel, ext)
+
+    part = sanitize_filename(program.get("partname", "program"), fallback="program")
 
     if isinstance(program, dict) and isinstance(program.get("steps"), list):
         for step in program["steps"]:
             if not isinstance(step, dict):
                 continue
             step_no = int(step.get("step_no", 0) or 0)
-            rel = image_members.get(step_no)
-            if rel:
-                step["upload_image"] = f"programs/{rel}"
+            mapped = image_members.get(step_no)
+            if mapped:
+                _, ext = mapped
+                step["upload_image"] = f"/programs/{part}/imgs/{step_no}.{ext}"
 
     if gcs_enabled():
         bucket = get_gcs_bucket()
         if bucket is not None:
-            with zipfile.ZipFile(io.BytesIO(raw)) as background_archive:
-                for info in background_archive.infolist():
-                    if info.is_dir():
-                        continue
-                    rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
-                    if not rel:
-                        continue
-                    payload = background_archive.read(info)
-                    content_type = mimetypes.guess_type(rel)[0] or "application/octet-stream"
-                    bucket.blob(gcs_blob_name(rel)).upload_from_string(
-                        payload,
-                        content_type=content_type,
-                    )
+            for step_no, (rel, ext) in image_members.items():
+                payload = archive.read(rel)
+                content_type = "image/png" if ext == "png" else "image/jpeg"
+                bucket.blob(gcs_blob_name(f"{part}/imgs/{step_no}.{ext}")).upload_from_string(
+                    payload,
+                    content_type=content_type,
+                )
+            bucket.blob(gcs_blob_name(f"{part}.json")).upload_from_string(
+                json.dumps(program, indent=4),
+                content_type="application/json",
+            )
         return program
 
-    # Extract ZIP entries into /programs safely so referenced images are available.
-    for info in archive.infolist():
-        if info.is_dir():
-            continue
-        rel = Path(info.filename)
-        target = (PROGRAMS_DIR / rel).resolve()
-        if not str(target).startswith(str(PROGRAMS_DIR.resolve())):
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(archive.read(info))
+    # Local mode: keep only the normalized recipe JSON and step images.
+    json_path = PROGRAMS_DIR / f"{part}.json"
+    image_dir = PROGRAMS_DIR / part / "imgs"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    for step_no, (rel, ext) in image_members.items():
+        (image_dir / f"{step_no}.{ext}").write_bytes(archive.read(rel))
+    json_path.write_text(json.dumps(program, indent=4), encoding="utf-8")
     return program
 
 
@@ -1097,6 +1094,7 @@ def api_load_program(program_file: str):
     if gcs_enabled():
         raw = download_bytes_from_gcs(name)
         if raw is None:
+            # Backward-compatible read support for older objects written under programs/.
             raw = download_bytes_from_gcs(f"programs/{name}")
         if raw is None:
             raise HTTPException(status_code=404, detail="Program file not found")
@@ -1196,7 +1194,9 @@ async def api_upload_recipe_session(request: Request):
     if bucket is None:
         raise HTTPException(status_code=400, detail="GCS bucket not available")
 
-    staging_blob_name = gcs_blob_name(f"staging/{uuid.uuid4().hex}_{filename}")
+    # Keep temp objects outside the app prefix so program-editor/ only contains
+    # recipe JSONs and their images.
+    staging_blob_name = f"_tmp_uploads/{uuid.uuid4().hex}_{filename}"
     upload_url = bucket.blob(staging_blob_name).create_resumable_upload_session(
         content_type=content_type,
         size=size,
@@ -1256,7 +1256,7 @@ async def api_upload_image_to_gcs(
     part = sanitize_filename(partname, fallback="program")
     image_name = f"{int(step_no)}.png"
     upload_bytes_to_gcs(
-        f"programs/{part}/imgs/{image_name}",
+        f"{part}/imgs/{image_name}",
         raw,
         file.content_type or "image/png",
     )
