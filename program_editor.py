@@ -763,44 +763,7 @@ def build_steps_pdf(program: Dict[str, Any], include_checkbox_fields: bool = Tru
 def persist_program_locked() -> None:
     part = sanitize_filename(CURRENT_DATA.get("partname", "program"))
     if gcs_enabled():
-        payload = json.dumps(CURRENT_DATA, indent=4).encode("utf-8")
-        upload_bytes_to_gcs(f"programs/{part}.json", payload, "application/json")
-
-        active_image_names = set()
-        for step in CURRENT_DATA.get("steps", []):
-            step_no = int(step.get("step_no", 0) or 0)
-            if step_no <= 0:
-                continue
-
-            image_name = f"{step_no}.png"
-            image_value = step.get("upload_image", "")
-            if not image_value:
-                step["upload_image"] = ""
-                continue
-
-            image_bytes = resolve_step_image_bytes(CURRENT_DATA, step)
-            if image_bytes is None:
-                step["upload_image"] = ""
-                continue
-
-            upload_bytes_to_gcs(
-                f"programs/{part}/imgs/{image_name}",
-                image_bytes,
-                "image/png",
-            )
-            step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
-            active_image_names.add(image_name)
-
-        bucket = get_gcs_bucket()
-        if bucket is not None:
-            prefix = gcs_blob_name(f"programs/{part}/imgs/")
-            for blob in bucket.list_blobs(prefix=prefix):
-                if blob.name.endswith("/"):
-                    continue
-                if Path(blob.name).name not in active_image_names:
-                    blob.delete()
-
-        refresh_program_index_locked()
+        persist_program_snapshot_to_gcs(CURRENT_DATA)
         return
 
     json_path = PROGRAMS_DIR / f"{part}.json"
@@ -876,6 +839,52 @@ def persist_program_locked() -> None:
         sync_program_to_gcs_async(CURRENT_DATA)
 
 
+def persist_program_snapshot_to_gcs(program: Dict[str, Any]) -> None:
+    if not gcs_enabled():
+        return
+
+    snapshot = copy.deepcopy(program)
+    part = sanitize_filename(snapshot.get("partname", "program"))
+    payload = json.dumps(snapshot, indent=4).encode("utf-8")
+    upload_bytes_to_gcs(f"programs/{part}.json", payload, "application/json")
+
+    active_image_names = set()
+    for step in snapshot.get("steps", []):
+        step_no = int(step.get("step_no", 0) or 0)
+        if step_no <= 0:
+            continue
+
+        image_name = f"{step_no}.png"
+        image_value = step.get("upload_image", "")
+        if not image_value:
+            step["upload_image"] = ""
+            continue
+
+        image_bytes = resolve_step_image_bytes(snapshot, step)
+        if image_bytes is None:
+            step["upload_image"] = ""
+            continue
+
+        upload_bytes_to_gcs(
+            f"programs/{part}/imgs/{image_name}",
+            image_bytes,
+            "image/png",
+        )
+        step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
+        active_image_names.add(image_name)
+
+    bucket = get_gcs_bucket()
+    if bucket is not None:
+        prefix = gcs_blob_name(f"programs/{part}/imgs/")
+        for blob in bucket.list_blobs(prefix=prefix):
+            if blob.name.endswith("/"):
+                continue
+            if Path(blob.name).name not in active_image_names:
+                blob.delete()
+
+    refresh_program_index_locked()
+
+
 def parse_program_json_bytes(raw: bytes, source_label: str) -> Dict[str, Any]:
     try:
         return json.loads(raw.decode("utf-8"))
@@ -937,12 +946,13 @@ def get_state() -> Dict[str, Any]:
         return copy.deepcopy(CURRENT_DATA)
 
 
-def set_state(data: Dict[str, Any]) -> Dict[str, Any]:
+def set_state(data: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
     normalized = normalize_program(data)
     with STATE_LOCK:
         CURRENT_DATA.clear()
         CURRENT_DATA.update(normalized)
-        persist_program_locked()
+        if persist:
+            persist_program_locked()
     return copy.deepcopy(CURRENT_DATA)
 
 
@@ -1059,7 +1069,10 @@ def api_set_program(program: Dict[str, Any]):
 async def api_upload(file: UploadFile = File(...)):
     raw = await file.read()
     program = parse_program_json_bytes(raw, "file")
-    saved_program = set_state(program)
+    saved_program = set_state(program, persist=not gcs_enabled())
+    if gcs_enabled():
+        snapshot = copy.deepcopy(saved_program)
+        threading.Thread(target=persist_program_snapshot_to_gcs, args=(snapshot,), daemon=True).start()
     return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
 
 
@@ -1067,7 +1080,10 @@ async def api_upload(file: UploadFile = File(...)):
 async def api_upload_zip(file: UploadFile = File(...)):
     raw = await file.read()
     program = parse_program_from_zip_bytes(raw)
-    saved_program = set_state(program)
+    saved_program = set_state(program, persist=not gcs_enabled())
+    if gcs_enabled():
+        snapshot = copy.deepcopy(saved_program)
+        threading.Thread(target=persist_program_snapshot_to_gcs, args=(snapshot,), daemon=True).start()
     return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
 
 
@@ -1083,7 +1099,9 @@ async def api_upload_to_gcs(file: UploadFile = File(...)):
     else:
         raise HTTPException(status_code=400, detail="Unsupported file type. Upload .json or .zip")
 
-    saved_program = set_state(program)
+    saved_program = set_state(program, persist=False)
+    snapshot = copy.deepcopy(saved_program)
+    threading.Thread(target=persist_program_snapshot_to_gcs, args=(snapshot,), daemon=True).start()
     return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
 
 
