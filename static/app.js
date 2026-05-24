@@ -1448,6 +1448,41 @@ function uploadFileWithProgress(endpoint, file, title) {
   });
 }
 
+function putFileToUrlWithProgress(uploadUrl, file, title) {
+  return new Promise((resolve, reject) => {
+    const fileLabel = `${file.name} • ${formatFileSize(file.size)}`;
+
+    const xhr = new XMLHttpRequest();
+    uploadState.xhr = xhr;
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) {
+        setUploadOverlayProgress(65, `Uploading ${fileLabel}...`);
+        return;
+      }
+      const percent = Math.min(98, (event.loaded / event.total) * 100);
+      setUploadOverlayProgress(percent, `Uploading ${fileLabel}...`);
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(xhr.responseText || `Upload failed (${xhr.status})`));
+        return;
+      }
+      setUploadOverlayProgress(100, `Uploaded ${fileLabel} to GCS...`);
+      resolve();
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network error during upload.')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload canceled.')));
+
+    showUploadOverlay(title || 'Uploading', `Preparing ${fileLabel}...`);
+    xhr.send(file);
+  });
+}
+
 async function uploadProgram(file) {
   try {
     const endpoint = state.storageConfig.gcs_enabled ? '/api/upload-to-gcs' : '/api/upload';
@@ -1470,8 +1505,41 @@ async function uploadProgram(file) {
 
 async function uploadRecipeZip(file) {
   try {
-    const endpoint = state.storageConfig.gcs_enabled ? '/api/upload-to-gcs' : '/api/upload-zip';
-    state.program = await uploadFileWithProgress(endpoint, file, 'Uploading recipe');
+    if (state.storageConfig.gcs_enabled) {
+      const sessionResponse = await fetch('/api/upload-recipe-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          content_type: file.type || 'application/zip',
+        }),
+      });
+      if (!sessionResponse.ok) {
+        throw new Error(await sessionResponse.text());
+      }
+      const session = await sessionResponse.json();
+      if (!session || typeof session !== 'object' || !session.upload_url || !session.staging_blob_name) {
+        throw new Error('Failed to create upload session.');
+      }
+
+      await putFileToUrlWithProgress(session.upload_url, file, 'Uploading recipe');
+      setUploadOverlayProgress(100, 'Finalizing recipe in GCS...');
+
+      const finalizeResponse = await fetch('/api/finalize-recipe-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ staging_blob_name: session.staging_blob_name }),
+      });
+      if (!finalizeResponse.ok) {
+        throw new Error(await finalizeResponse.text());
+      }
+      const payload = await finalizeResponse.json();
+      state.program = payload && typeof payload === 'object' && payload.program ? payload.program : payload;
+    } else {
+      const endpoint = '/api/upload-zip';
+      state.program = await uploadFileWithProgress(endpoint, file, 'Uploading recipe');
+    }
   } catch (error) {
     if (String(error).includes('canceled')) {
       return;

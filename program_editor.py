@@ -6,6 +6,7 @@ import json
 import threading
 import base64
 import io
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1144,6 +1145,78 @@ async def api_upload_to_gcs(file: UploadFile = File(...)):
     if not is_zip:
         threading.Thread(target=persist_program_snapshot_to_gcs, args=(snapshot,), daemon=True).start()
     return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
+
+
+@app.post("/api/upload-recipe-session")
+async def api_upload_recipe_session(request: Request):
+    if not gcs_enabled():
+        raise HTTPException(status_code=400, detail="GCS is not enabled")
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    filename = Path(str(payload.get("filename") or "upload.zip")).name
+    if not filename.lower().endswith(".zip"):
+        filename = f"{Path(filename).stem}.zip"
+
+    content_type = str(payload.get("content_type") or "application/zip")
+    size_value = payload.get("size")
+    try:
+        size = int(size_value) if size_value is not None and str(size_value) != "" else None
+    except Exception:
+        size = None
+
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        raise HTTPException(status_code=400, detail="GCS bucket not available")
+
+    staging_blob_name = gcs_blob_name(f"staging/{uuid.uuid4().hex}_{filename}")
+    upload_url = bucket.blob(staging_blob_name).create_resumable_upload_session(
+        content_type=content_type,
+        size=size,
+        origin=request.headers.get("origin"),
+    )
+    return {
+        "upload_url": upload_url,
+        "staging_blob_name": staging_blob_name,
+    }
+
+
+@app.post("/api/finalize-recipe-upload")
+async def api_finalize_recipe_upload(request: Request):
+    if not gcs_enabled():
+        raise HTTPException(status_code=400, detail="GCS is not enabled")
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+
+    staging_blob_name = str(payload.get("staging_blob_name") or "").strip()
+    if not staging_blob_name:
+        raise HTTPException(status_code=400, detail="Missing staging_blob_name")
+
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        raise HTTPException(status_code=400, detail="GCS bucket not available")
+
+    blob = bucket.blob(staging_blob_name)
+    if not blob.exists():
+        raise HTTPException(status_code=404, detail="Uploaded recipe not found in bucket")
+    raw = blob.download_as_bytes()
+
+    try:
+        program = parse_program_from_zip_bytes(raw)
+        saved_program = set_state(program, persist=False)
+        announce_program_in_gcs_index(copy.deepcopy(saved_program))
+        return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
+    finally:
+        try:
+            blob.delete()
+        except Exception:
+            pass
 
 
 @app.post("/api/upload-image-to-gcs")
