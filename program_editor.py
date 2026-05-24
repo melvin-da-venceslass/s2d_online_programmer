@@ -464,8 +464,16 @@ def resolve_step_image_bytes(program: Dict[str, Any], step: Dict[str, Any]) -> O
         return source_path.read_bytes()
 
     gcs_candidate = image_path.lstrip("/")
+    gcs_candidates = [gcs_candidate]
     if gcs_candidate.startswith("programs/"):
-        return download_bytes_from_gcs(gcs_candidate)
+        gcs_candidates.append(gcs_candidate.removeprefix("programs/"))
+    else:
+        gcs_candidates.append(f"programs/{gcs_candidate}")
+
+    for candidate in gcs_candidates:
+        gcs_bytes = download_bytes_from_gcs(candidate)
+        if gcs_bytes is not None:
+            return gcs_bytes
 
     part = sanitize_filename(program.get("partname", "program"))
     fallback_path = PROGRAMS_DIR / part / "imgs" / Path(image_path).name
@@ -961,28 +969,21 @@ def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
                 step["upload_image"] = f"programs/{rel}"
 
     if gcs_enabled():
-        def worker() -> None:
-            try:
-                bucket = get_gcs_bucket()
-                if bucket is None:
-                    return
-                with zipfile.ZipFile(io.BytesIO(raw)) as background_archive:
-                    for info in background_archive.infolist():
-                        if info.is_dir():
-                            continue
-                        rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
-                        if not rel:
-                            continue
-                        payload = background_archive.read(info)
-                        content_type = mimetypes.guess_type(rel)[0] or "application/octet-stream"
-                        bucket.blob(gcs_blob_name(rel)).upload_from_string(
-                            payload,
-                            content_type=content_type,
-                        )
-            except Exception:
-                pass
-
-        threading.Thread(target=worker, daemon=True).start()
+        bucket = get_gcs_bucket()
+        if bucket is not None:
+            with zipfile.ZipFile(io.BytesIO(raw)) as background_archive:
+                for info in background_archive.infolist():
+                    if info.is_dir():
+                        continue
+                    rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
+                    if not rel:
+                        continue
+                    payload = background_archive.read(info)
+                    content_type = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+                    bucket.blob(gcs_blob_name(rel)).upload_from_string(
+                        payload,
+                        content_type=content_type,
+                    )
         return program
 
     # Extract ZIP entries into /programs safely so referenced images are available.
