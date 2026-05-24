@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from google.cloud import storage
@@ -1085,6 +1085,26 @@ async def api_upload_to_gcs(file: UploadFile = File(...)):
 
     saved_program = set_state(program)
     return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
+
+
+@app.post("/api/upload-image-to-gcs")
+async def api_upload_image_to_gcs(
+    file: UploadFile = File(...),
+    partname: str = Form(...),
+    step_no: int = Form(...),
+):
+    raw = await file.read()
+    if not gcs_enabled():
+        raise HTTPException(status_code=400, detail="GCS is not enabled")
+
+    part = sanitize_filename(partname, fallback="program")
+    image_name = f"{int(step_no)}.png"
+    upload_bytes_to_gcs(
+        f"programs/{part}/imgs/{image_name}",
+        raw,
+        file.content_type or "image/png",
+    )
+    return {"storage_path": f"/programs/{part}/imgs/{image_name}"}
 
 
 @app.put("/api/steps/{index}")

@@ -1168,6 +1168,17 @@ async function saveStep(showProgress = true) {
   syncProgramInfoToState();
   const payload = collectFormStep();
   const savedImageCandidate = String(payload.upload_image || '').trim();
+  if (state.storageConfig.gcs_enabled && savedImageCandidate.startsWith('data:image')) {
+    try {
+      const storagePath = await uploadStepImageToGcs(savedImageCandidate, state.currentIndex + 1);
+      payload.upload_image = storagePath;
+      state.program.steps[state.currentIndex].upload_image = storagePath;
+      state.lastSavedImage = storagePath;
+    } catch (error) {
+      alert(`Image upload failed: ${error}`);
+      return false;
+    }
+  }
   state.program.steps[state.currentIndex] = payload;
   try {
     const responseData = showProgress
@@ -1288,6 +1299,48 @@ function formatFileSize(bytes) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function dataUrlToBlob(dataUrl) {
+  const raw = String(dataUrl || '');
+  const parts = raw.split(',');
+  if (parts.length !== 2 || !parts[0].startsWith('data:')) {
+    throw new Error('Invalid image payload');
+  }
+
+  const match = parts[0].match(/^data:([^;]+);base64$/i);
+  const mimeType = match ? match[1] : 'image/png';
+  const binary = atob(parts[1]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function uploadStepImageToGcs(imageDataUrl, stepNo) {
+  const partname = sanitizeFilename(state.program?.partname || 'program');
+  const imageBlob = dataUrlToBlob(imageDataUrl);
+  const formData = new FormData();
+  formData.append('file', imageBlob, `${partname}_${stepNo}.png`);
+  formData.append('partname', partname);
+  formData.append('step_no', String(stepNo));
+
+  const response = await fetch('/api/upload-image-to-gcs', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const payload = await response.json();
+  if (!payload || typeof payload !== 'object' || !payload.storage_path) {
+    throw new Error('Image upload did not return a bucket path');
+  }
+
+  return String(payload.storage_path);
 }
 
 function showUploadOverlay(title, message) {
