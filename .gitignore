@@ -2,6 +2,11 @@
 *__pycache__/
 *.pyc
 *.pyo
+.env
+key.json
+bucket_key.json
+service-account.json
 programs/*
 __pycache__/program_editor.cpython-314.pyc
 programs/IBE333333_A.json
+.DS_Store

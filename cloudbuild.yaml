@@ -2,6 +2,7 @@ substitutions:
   _SERVICE_NAME: program-editor
   _REGION: us-central1
   _AR_REPO: cloud-run
+  _GCS_BUCKET: ""
 
 steps:
   - name: gcr.io/cloud-builders/gcloud
@@ -41,6 +42,8 @@ steps:
       - managed
       - --allow-unauthenticated
       - --min-instances=1
+      - --set-env-vars
+      - GCS_BUCKET_NAME=${_GCS_BUCKET},GCS_KEY_FILE=/app/key.json
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:$COMMIT_SHA

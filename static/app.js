@@ -60,6 +60,10 @@ const state = {
   lastSavedImage: '',
   stepClipboard: null,
   serverPrograms: [],
+  storageConfig: {
+    gcs_enabled: false,
+    direct_upload_threshold_bytes: 20 * 1024 * 1024,
+  },
 };
 
 const els = {
@@ -88,6 +92,18 @@ const els = {
   editorPane: document.querySelector('.editor'),
   modeCardsWrap: document.querySelector('.mode-cards'),
   modeCards: Array.from(document.querySelectorAll('.mode-card')),
+  uploadOverlay: document.getElementById('upload-overlay'),
+  uploadOverlayTitle: document.getElementById('upload-overlay-title'),
+  uploadOverlayMessage: document.getElementById('upload-overlay-message'),
+  uploadProgressBar: document.getElementById('upload-progress-bar'),
+  uploadProgressText: document.getElementById('upload-progress-text'),
+  uploadOverlayPath: document.getElementById('upload-overlay-path'),
+  uploadCancelBtn: document.getElementById('upload-cancel-btn'),
+};
+
+const uploadState = {
+  xhr: null,
+  active: false,
 };
 
 function applyEditorModeTheme(step) {
@@ -1186,18 +1202,145 @@ async function saveProgram() {
   await refreshProgramSelect();
 }
 
-async function uploadProgram(file) {
-  const formData = new FormData();
-  formData.append('file', file);
-  const response = await fetch('/api/upload', {
-    method: 'POST',
-    body: formData,
-  });
-  if (!response.ok) {
-    alert(await response.text());
-    return;
+async function loadStorageConfig() {
+  try {
+    const response = await fetch('/api/storage-config');
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    state.storageConfig = {
+      gcs_enabled: Boolean(payload.gcs_enabled),
+      direct_upload_threshold_bytes: Number(payload.direct_upload_threshold_bytes) || 20 * 1024 * 1024,
+    };
+  } catch (_) {
+    // Keep local upload flow as fallback when config endpoint is unavailable.
   }
-  state.program = await response.json();
+}
+
+function setUploadOverlayProgress(percent, message) {
+  if (!els.uploadOverlay) return;
+  const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
+  if (els.uploadProgressBar) {
+    els.uploadProgressBar.style.width = `${clamped}%`;
+  }
+  if (els.uploadProgressText) {
+    els.uploadProgressText.textContent = `${Math.round(clamped)}%`;
+  }
+  if (els.uploadOverlayMessage && message) {
+    els.uploadOverlayMessage.textContent = message;
+  }
+  const track = els.uploadOverlay.querySelector('.upload-progress-track');
+  if (track) {
+    track.setAttribute('aria-valuenow', String(Math.round(clamped)));
+  }
+}
+
+function setUploadOverlayPath(pathText) {
+  if (!els.uploadOverlayPath) return;
+  els.uploadOverlayPath.textContent = pathText || '';
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function showUploadOverlay(title, message) {
+  if (!els.uploadOverlay) return;
+  if (els.uploadOverlayTitle) {
+    els.uploadOverlayTitle.textContent = title || 'Uploading';
+  }
+  setUploadOverlayProgress(0, message || 'Preparing upload...');
+  setUploadOverlayPath('');
+  els.uploadOverlay.hidden = false;
+  document.body.classList.add('uploading');
+  uploadState.active = true;
+}
+
+function hideUploadOverlay() {
+  if (!els.uploadOverlay) return;
+  els.uploadOverlay.hidden = true;
+  document.body.classList.remove('uploading');
+  setUploadOverlayProgress(0, 'Preparing upload...');
+  setUploadOverlayPath('');
+  if (els.uploadOverlayTitle) {
+    els.uploadOverlayTitle.textContent = 'Uploading';
+  }
+  uploadState.active = false;
+  uploadState.xhr = null;
+}
+
+function cancelCurrentUpload() {
+  if (uploadState.xhr) {
+    uploadState.xhr.abort();
+  }
+}
+
+function uploadFileWithProgress(endpoint, file, title) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const fileLabel = `${file.name} • ${formatFileSize(file.size)}`;
+
+    const xhr = new XMLHttpRequest();
+  uploadState.xhr = xhr;
+    xhr.open('POST', endpoint);
+    xhr.responseType = 'text';
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) {
+        setUploadOverlayProgress(65, `Uploading ${fileLabel}...`);
+        return;
+      }
+      const percent = Math.min(98, (event.loaded / event.total) * 100);
+      setUploadOverlayProgress(percent, `Uploading ${fileLabel}...`);
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(xhr.responseText || `Upload failed (${xhr.status})`));
+        return;
+      }
+      setUploadOverlayProgress(100, `Processing ${fileLabel}...`);
+      try {
+        const payload = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+        const uploadedProgram = payload && typeof payload === 'object' && payload.program ? payload.program : payload;
+        if (payload && typeof payload === 'object' && payload.storage_path) {
+          setUploadOverlayPath(`Bucket path: ${payload.storage_path}`);
+        }
+        setUploadOverlayProgress(100, `Finalizing ${fileLabel} in the bucket...`);
+        resolve(uploadedProgram);
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    xhr.addEventListener('error', () => reject(new Error('Network error during upload.')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload canceled.')));
+
+    showUploadOverlay(title || 'Uploading', `Preparing ${fileLabel}...`);
+    xhr.send(formData);
+  });
+}
+
+async function uploadProgram(file) {
+  try {
+    const endpoint = state.storageConfig.gcs_enabled ? '/api/upload-to-gcs' : '/api/upload';
+    state.program = await uploadFileWithProgress(endpoint, file, 'Uploading program');
+  } catch (error) {
+    if (String(error).includes('canceled')) {
+      return;
+    }
+    alert(String(error));
+    return;
+  } finally {
+    hideUploadOverlay();
+  }
+
   state.currentIndex = 0;
   resetDirty();
   renderEditor();
@@ -1205,17 +1348,19 @@ async function uploadProgram(file) {
 }
 
 async function uploadRecipeZip(file) {
-  const formData = new FormData();
-  formData.append('file', file);
-  const response = await fetch('/api/upload-zip', {
-    method: 'POST',
-    body: formData,
-  });
-  if (!response.ok) {
-    alert(await response.text());
+  try {
+    const endpoint = state.storageConfig.gcs_enabled ? '/api/upload-to-gcs' : '/api/upload-zip';
+    state.program = await uploadFileWithProgress(endpoint, file, 'Uploading recipe');
+  } catch (error) {
+    if (String(error).includes('canceled')) {
+      return;
+    }
+    alert(String(error));
     return;
+  } finally {
+    hideUploadOverlay();
   }
-  state.program = await response.json();
+
   state.currentIndex = 0;
   resetDirty();
   renderEditor();
@@ -1436,6 +1581,10 @@ function bindEvents() {
     els.uploadZipFile.value = '';
   });
 
+  if (els.uploadCancelBtn) {
+    els.uploadCancelBtn.addEventListener('click', cancelCurrentUpload);
+  }
+
   els.partname.addEventListener('input', markDirty);
   els.enableMes.addEventListener('change', markDirty);
   els.enableFtp.addEventListener('change', markDirty);
@@ -1449,6 +1598,7 @@ function init() {
   syncProgramInfoToState();
   updateProgramInfoFields();
   renderEditor();
+  loadStorageConfig();
   refreshProgramSelect();
 }
 

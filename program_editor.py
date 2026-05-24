@@ -5,7 +5,6 @@ import json
 import threading
 import base64
 import io
-import os
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,11 +13,14 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from google.cloud import storage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
+
+from config import settings
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "template.json"
@@ -26,14 +28,24 @@ STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = BASE_DIR / "templates" / "index.html"
 PREVIEW_FILE = BASE_DIR / "templates" / "preview.html"
 PROGRAMS_DIR = BASE_DIR / "programs"
+PROGRAM_INDEX_FILE = BASE_DIR / "program-index.json"
 
-app = FastAPI(title="Program Editor")
+GCS_BUCKET_NAME = settings.gcs_bucket_name
+GCS_PREFIX = settings.gcs_prefix
+GCS_DIRECT_UPLOAD_THRESHOLD_BYTES = max(
+    1_000_000,
+    settings.gcs_direct_upload_threshold_bytes,
+)
+GCS_KEY_FILE = settings.gcs_key_file
+
+app = FastAPI(title=settings.app_name)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 PROGRAMS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/programs", StaticFiles(directory=PROGRAMS_DIR), name="programs")
 
 STATE_LOCK = threading.Lock()
 CURRENT_DATA: Dict[str, Any] = {}
+GCS_CLIENT: Optional[storage.Client] = None
 
 STEP_TEMPLATE: Dict[str, Any] = {
     "upload_image": "",
@@ -119,6 +131,206 @@ DEFAULT_DATA: Dict[str, Any] = {
 }
 
 
+def _resolve_gcs_key_file() -> Optional[Path]:
+    candidates: List[Path] = []
+    if GCS_KEY_FILE:
+        candidates.append(Path(GCS_KEY_FILE))
+    candidates.extend(
+        [
+            BASE_DIR / "bucket_key.json",
+            BASE_DIR / "key.json",
+            BASE_DIR / "service-account.json",
+        ]
+    )
+    for candidate in candidates:
+        resolved = candidate if candidate.is_absolute() else (BASE_DIR / candidate)
+        if resolved.exists() and resolved.is_file():
+            return resolved
+    return None
+
+
+def get_gcs_client() -> Optional[storage.Client]:
+    global GCS_CLIENT
+    if not GCS_BUCKET_NAME:
+        return None
+    if GCS_CLIENT is not None:
+        return GCS_CLIENT
+
+    key_file = _resolve_gcs_key_file()
+    try:
+        if key_file is not None:
+            GCS_CLIENT = storage.Client.from_service_account_json(str(key_file))
+        else:
+            GCS_CLIENT = storage.Client()
+    except Exception:
+        return None
+    return GCS_CLIENT
+
+
+def get_gcs_bucket() -> Optional[storage.Bucket]:
+    client = get_gcs_client()
+    if client is None:
+        return None
+    return client.bucket(GCS_BUCKET_NAME)
+
+
+def gcs_enabled() -> bool:
+    return get_gcs_bucket() is not None
+
+
+def gcs_blob_name(relative_path: str) -> str:
+    rel = str(relative_path).strip("/ ")
+    if not rel:
+        raise ValueError("GCS blob path cannot be empty")
+    return f"{GCS_PREFIX}/{rel}" if GCS_PREFIX else rel
+
+
+def upload_bytes_to_gcs(relative_path: str, payload: bytes, content_type: str) -> None:
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        return
+    blob = bucket.blob(gcs_blob_name(relative_path))
+    blob.upload_from_string(payload, content_type=content_type)
+
+
+def _list_local_program_names() -> List[str]:
+    return sorted({fp.name for fp in PROGRAMS_DIR.glob("*.json")})
+
+
+def refresh_program_index_locked() -> List[str]:
+    program_names = _list_local_program_names()
+    index_payload = json.dumps(program_names, indent=4)
+    PROGRAM_INDEX_FILE.write_text(index_payload, encoding="utf-8")
+    if gcs_enabled():
+        upload_bytes_to_gcs("program-index.json", index_payload.encode("utf-8"), "application/json")
+    return program_names
+
+
+def load_program_index_from_gcs() -> List[str]:
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        return []
+
+    blob = bucket.blob(gcs_blob_name("program-index.json"))
+    if not blob.exists():
+        return []
+
+    try:
+        payload = json.loads(blob.download_as_text())
+    except Exception:
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    names = [Path(str(name)).name for name in payload if str(name).lower().endswith(".json")]
+    return sorted(set(names))
+
+
+def download_bytes_from_gcs(relative_path: str) -> Optional[bytes]:
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        return None
+    blob = bucket.blob(gcs_blob_name(relative_path))
+    if not blob.exists():
+        return None
+    return blob.download_as_bytes()
+
+
+def list_programs_from_gcs() -> List[str]:
+    indexed_programs = load_program_index_from_gcs()
+    if indexed_programs:
+        return indexed_programs
+
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        return []
+
+    prefix = gcs_blob_name("programs/")
+    names: List[str] = []
+    for blob in bucket.list_blobs(prefix=prefix):
+        if not blob.name.endswith(".json"):
+            continue
+        tail = blob.name[len(prefix) :]
+        if "/" in tail:
+            continue
+        names.append(Path(tail).name)
+    return sorted(set(names))
+
+
+def sync_program_images_from_gcs(part: str) -> None:
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        return
+
+    image_dir = PROGRAMS_DIR / part / "imgs"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    prefix = gcs_blob_name(f"programs/{part}/imgs/")
+    for blob in bucket.list_blobs(prefix=prefix):
+        if blob.name.endswith("/"):
+            continue
+        rel_name = blob.name[len(prefix) :]
+        if not rel_name or "/" in rel_name:
+            continue
+        local_path = image_dir / Path(rel_name).name
+        local_path.write_bytes(blob.download_as_bytes())
+
+
+def sync_program_to_gcs(program: Dict[str, Any], include_json: bool = True) -> None:
+    if not gcs_enabled():
+        return
+
+    part = sanitize_filename(program.get("partname", "program"), fallback="program")
+    json_path = PROGRAMS_DIR / f"{part}.json"
+    image_dir = PROGRAMS_DIR / part / "imgs"
+
+    if include_json and json_path.exists():
+        upload_bytes_to_gcs(f"programs/{json_path.name}", json_path.read_bytes(), "application/json")
+
+    expected_images: set[str] = set()
+    if image_dir.exists() and image_dir.is_dir():
+        for fp in image_dir.glob("*"):
+            if not fp.is_file():
+                continue
+            expected_images.add(fp.name)
+            upload_bytes_to_gcs(
+                f"programs/{part}/imgs/{fp.name}",
+                fp.read_bytes(),
+                "image/png",
+            )
+
+    bucket = get_gcs_bucket()
+    if bucket is None:
+        return
+    prefix = gcs_blob_name(f"programs/{part}/imgs/")
+    for blob in bucket.list_blobs(prefix=prefix):
+        if blob.name.endswith("/"):
+            continue
+        name = Path(blob.name).name
+        if name not in expected_images:
+            blob.delete()
+
+
+def sync_program_to_gcs_async(program: Dict[str, Any]) -> None:
+    snapshot = copy.deepcopy(program)
+
+    def worker() -> None:
+        try:
+            sync_program_to_gcs(snapshot, include_json=False)
+        except Exception:
+            # Keep uploads responsive even if the background bucket sync fails.
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def program_storage_path(program: Dict[str, Any]) -> str:
+    part = sanitize_filename(program.get("partname", "program"), fallback="program")
+    if gcs_enabled():
+        return f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name(f'programs/{part}.json')}"
+    return str((PROGRAMS_DIR / f"{part}.json").resolve())
+
+
 def _load_default_data() -> Dict[str, Any]:
     if DATA_FILE.exists():
         try:
@@ -170,6 +382,12 @@ def normalize_step(step: Dict[str, Any], step_no: int) -> Dict[str, Any]:
     else:
         normalized["bc_parent"] = False
         normalized["bc_child"] = True
+
+    # Set remarks based on mode
+    if normalized["enable_barcode"]:
+        normalized["remarks"] = normalized.get("bc_title", "")
+    elif normalized["request_ack"]:
+        normalized["remarks"] = normalized.get("ack_title", "")
     return normalized
 
 
@@ -212,6 +430,14 @@ def resolve_step_image_bytes(program: Dict[str, Any], step: Dict[str, Any]) -> O
 
     if source_path.exists() and source_path.is_file():
         return source_path.read_bytes()
+
+    gcs_candidate = image_path.lstrip("/")
+    if gcs_candidate.startswith("programs/"):
+        gcs_bytes = download_bytes_from_gcs(gcs_candidate)
+        if gcs_bytes is not None:
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_bytes(gcs_bytes)
+            return gcs_bytes
 
     part = sanitize_filename(program.get("partname", "program"))
     fallback_path = PROGRAMS_DIR / part / "imgs" / Path(image_path).name
@@ -580,6 +806,52 @@ def persist_program_locked() -> None:
                 existing.unlink()
 
     json_path.write_text(json.dumps(CURRENT_DATA, indent=4), encoding="utf-8")
+    refresh_program_index_locked()
+    if gcs_enabled():
+        upload_bytes_to_gcs(f"programs/{part}.json", json_path.read_bytes(), "application/json")
+        sync_program_to_gcs_async(CURRENT_DATA)
+
+
+def parse_program_json_bytes(raw: bytes, source_label: str) -> Dict[str, Any]:
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON {source_label}: {exc}") from exc
+
+
+def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {exc}") from exc
+
+    json_entry = None
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        if info.filename.lower().endswith(".json"):
+            json_entry = info
+            break
+
+    if json_entry is None:
+        raise HTTPException(status_code=400, detail="ZIP does not contain a JSON recipe file")
+
+    try:
+        program = json.loads(archive.read(json_entry).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON inside ZIP: {exc}") from exc
+
+    # Extract ZIP entries into /programs safely so referenced images are available.
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        rel = Path(info.filename)
+        target = (PROGRAMS_DIR / rel).resolve()
+        if not str(target).startswith(str(PROGRAMS_DIR.resolve())):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(archive.read(info))
+    return program
 
 
 def get_state() -> Dict[str, Any]:
@@ -636,7 +908,6 @@ def startup() -> None:
     global CURRENT_DATA
     with STATE_LOCK:
         CURRENT_DATA = _load_default_data()
-        persist_program_locked()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -659,10 +930,16 @@ def api_get_program():
 
 @app.get("/api/programs")
 def api_list_programs():
-    programs = []
-    for fp in sorted(PROGRAMS_DIR.glob("*.json")):
-        programs.append(fp.name)
-    return {"programs": programs}
+    if gcs_enabled():
+        try:
+            programs = list_programs_from_gcs()
+            if not programs:
+                programs = _list_local_program_names()
+            return {"programs": programs}
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Unable to list programs from GCS: {exc}") from exc
+
+    return {"programs": _list_local_program_names()}
 
 
 @app.post("/api/programs/{program_file}")
@@ -674,15 +951,30 @@ def api_load_program(program_file: str):
     target = (PROGRAMS_DIR / name).resolve()
     if not str(target).startswith(str(PROGRAMS_DIR.resolve())):
         raise HTTPException(status_code=400, detail="Invalid program file path")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="Program file not found")
-
-    try:
-        program = json.loads(target.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid program JSON: {exc}") from exc
+    if gcs_enabled():
+        raw = download_bytes_from_gcs(f"programs/{name}")
+        if raw is None:
+            raise HTTPException(status_code=404, detail="Program file not found")
+        program = parse_program_json_bytes(raw, "from bucket")
+        part = sanitize_filename(program.get("partname", "program"), fallback="program")
+        sync_program_images_from_gcs(part)
+    else:
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="Program file not found")
+        try:
+            program = json.loads(target.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid program JSON: {exc}") from exc
 
     return set_state(program)
+
+
+@app.get("/api/storage-config")
+def api_storage_config():
+    return {
+        "gcs_enabled": gcs_enabled(),
+        "direct_upload_threshold_bytes": GCS_DIRECT_UPLOAD_THRESHOLD_BYTES,
+    }
 
 
 @app.post("/api/program")
@@ -693,49 +985,33 @@ def api_set_program(program: Dict[str, Any]):
 @app.post("/api/upload")
 async def api_upload(file: UploadFile = File(...)):
     raw = await file.read()
-    try:
-        program = json.loads(raw.decode("utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON file: {exc}") from exc
-    return set_state(program)
+    program = parse_program_json_bytes(raw, "file")
+    saved_program = set_state(program)
+    return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
 
 
 @app.post("/api/upload-zip")
 async def api_upload_zip(file: UploadFile = File(...)):
     raw = await file.read()
-    try:
-        archive = zipfile.ZipFile(io.BytesIO(raw))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {exc}") from exc
+    program = parse_program_from_zip_bytes(raw)
+    saved_program = set_state(program)
+    return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
 
-    json_entry = None
-    for info in archive.infolist():
-        if info.is_dir():
-            continue
-        if info.filename.lower().endswith(".json"):
-            json_entry = info
-            break
 
-    if json_entry is None:
-        raise HTTPException(status_code=400, detail="ZIP does not contain a JSON recipe file")
+@app.post("/api/upload-to-gcs")
+async def api_upload_to_gcs(file: UploadFile = File(...)):
+    raw = await file.read()
 
-    try:
-        program = json.loads(archive.read(json_entry).decode("utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON inside ZIP: {exc}") from exc
+    filename = Path(file.filename or "upload.bin").name.lower()
+    if filename.endswith(".json"):
+        program = parse_program_json_bytes(raw, "file")
+    elif filename.endswith(".zip"):
+        program = parse_program_from_zip_bytes(raw)
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Upload .json or .zip")
 
-    # Extract ZIP entries into /programs safely so referenced images are available.
-    for info in archive.infolist():
-        if info.is_dir():
-            continue
-        rel = Path(info.filename)
-        target = (PROGRAMS_DIR / rel).resolve()
-        if not str(target).startswith(str(PROGRAMS_DIR.resolve())):
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(archive.read(info))
-
-    return set_state(program)
+    saved_program = set_state(program)
+    return {"program": saved_program, "storage_path": program_storage_path(saved_program)}
 
 
 @app.put("/api/steps/{index}")
@@ -880,7 +1156,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "program_editor:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8000")),
-        reload=False,
+        host=settings.host,
+        port=settings.port,
+        reload=settings.debug,
     )

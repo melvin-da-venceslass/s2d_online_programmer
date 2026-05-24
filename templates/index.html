@@ -101,6 +101,22 @@
     </section>
   </main>
 
+  <div id="upload-overlay" class="upload-overlay" hidden aria-live="polite" aria-busy="true">
+    <div class="upload-overlay-card">
+      <div class="upload-spinner" aria-hidden="true"></div>
+      <h2 id="upload-overlay-title">Uploading</h2>
+      <p id="upload-overlay-message">Preparing upload...</p>
+      <p id="upload-overlay-path" class="upload-overlay-path"></p>
+      <div class="upload-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="upload-progress-bar" class="upload-progress-bar"></div>
+      </div>
+      <div id="upload-progress-text" class="upload-progress-text">0%</div>
+      <div class="upload-overlay-actions">
+        <button id="upload-cancel-btn" type="button" class="secondary">Cancel Upload</button>
+      </div>
+    </div>
+  </div>
+
   <template id="section-template">
     <section class="section">
       <h3></h3>
