@@ -937,6 +937,29 @@ def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid JSON inside ZIP: {exc}") from exc
 
+    image_members: Dict[int, str] = {}
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
+        if not rel:
+            continue
+        if not rel.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            continue
+        name = Path(rel).name
+        stem = Path(name).stem
+        if stem.isdigit():
+            image_members[int(stem)] = rel
+
+    if isinstance(program, dict) and isinstance(program.get("steps"), list):
+        for step in program["steps"]:
+            if not isinstance(step, dict):
+                continue
+            step_no = int(step.get("step_no", 0) or 0)
+            rel = image_members.get(step_no)
+            if rel:
+                step["upload_image"] = f"programs/{rel}"
+
     if gcs_enabled():
         def worker() -> None:
             try:
