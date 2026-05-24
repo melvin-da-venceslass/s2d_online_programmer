@@ -181,19 +181,25 @@ async function refreshProgramSelect() {
 }
 
 async function loadProgramFromServer(programFile) {
-  const response = await fetch(`/api/programs/${encodeURIComponent(programFile)}`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    alert(await response.text());
+  try {
+    const responseData = await requestJsonWithProgress(
+      `/api/programs/${encodeURIComponent(programFile)}`,
+      { method: 'POST' },
+      'Loading program',
+      `Loading ${programFile}...`,
+      'Program loaded'
+    );
+    state.program = responseData && responseData.program ? responseData.program : responseData;
+    state.currentIndex = 0;
+    resetDirty();
+    renderEditor();
     await refreshProgramSelect();
-    return;
+  } catch (error) {
+    alert(String(error));
+    await refreshProgramSelect();
+  } finally {
+    hideUploadOverlay();
   }
-  state.program = await response.json();
-  state.currentIndex = 0;
-  resetDirty();
-  renderEditor();
-  await refreshProgramSelect();
 }
 
 function blankStep() {
@@ -1158,48 +1164,84 @@ function selectStep(index) {
   renderEditor();
 }
 
-async function saveStep() {
+async function saveStep(showProgress = true) {
   syncProgramInfoToState();
   const payload = collectFormStep();
   const savedImageCandidate = String(payload.upload_image || '').trim();
   state.program.steps[state.currentIndex] = payload;
-  const response = await fetch(`/api/steps/${state.currentIndex}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.text();
-    alert(`Save failed: ${err}`);
-    return;
+  try {
+    const responseData = showProgress
+      ? await requestJsonWithProgress(
+          `/api/steps/${state.currentIndex}`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+          'Saving step',
+          'Saving step...',
+          'Step saved'
+        )
+      : await (async () => {
+          const response = await fetch(`/api/steps/${state.currentIndex}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+          return response.json();
+        })();
+
+    state.program = responseData && responseData.program ? responseData.program : responseData;
+    if (savedImageCandidate) {
+      state.lastSavedImage = savedImageCandidate;
+    }
+    syncProgramInfoToState();
+    resetDirty();
+    renderEditor();
+    return true;
+  } catch (error) {
+    alert(`Save failed: ${error}`);
+    return false;
+  } finally {
+    if (showProgress) {
+      hideUploadOverlay();
+    }
   }
-  state.program = await response.json();
-  if (savedImageCandidate) {
-    state.lastSavedImage = savedImageCandidate;
-  }
-  syncProgramInfoToState();
-  resetDirty();
-  renderEditor();
 }
 
 async function saveProgram() {
   if (state.dirty) {
-    await saveStep();
+    const saved = await saveStep(false);
+    if (!saved) {
+      return;
+    }
   }
   syncProgramInfoToState();
-  const response = await fetch('/api/program', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(state.program),
-  });
-  if (!response.ok) {
-    alert('Program save failed.');
+  try {
+    const responseData = await requestJsonWithProgress(
+      '/api/program',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.program),
+      },
+      'Saving program',
+      'Saving program...',
+      'Program saved'
+    );
+    state.program = responseData && responseData.program ? responseData.program : responseData;
+    resetDirty();
+    renderEditor();
+    await refreshProgramSelect();
+  } catch (error) {
+    alert(`Program save failed: ${error}`);
     return;
+  } finally {
+    hideUploadOverlay();
   }
-  state.program = await response.json();
-  resetDirty();
-  renderEditor();
-  await refreshProgramSelect();
 }
 
 async function loadStorageConfig() {
@@ -1271,6 +1313,32 @@ function hideUploadOverlay() {
   }
   uploadState.active = false;
   uploadState.xhr = null;
+}
+
+async function requestJsonWithProgress(url, options, title, startMessage, endMessage) {
+  showUploadOverlay(title, startMessage);
+  setUploadOverlayProgress(10, startMessage);
+
+  const timer = window.setInterval(() => {
+    if (!els.uploadProgressBar) return;
+    const current = Number.parseFloat(els.uploadProgressBar.style.width || '0') || 0;
+    if (current < 90) {
+      setUploadOverlayProgress(Math.min(90, current + 7), startMessage);
+    }
+  }, 160);
+
+  try {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    setUploadOverlayProgress(96, endMessage || 'Finalizing...');
+    const payload = await response.json();
+    setUploadOverlayProgress(100, endMessage || 'Done');
+    return payload;
+  } finally {
+    window.clearInterval(timer);
+  }
 }
 
 function cancelCurrentUpload() {
