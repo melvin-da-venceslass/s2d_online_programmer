@@ -1165,11 +1165,23 @@ function selectStep(index) {
 }
 
 async function saveStep(showProgress = true) {
+  const updateProgress = (percent, message) => {
+    if (!showProgress) return;
+    setUploadOverlayProgress(percent, message);
+  };
+
   syncProgramInfoToState();
   const payload = collectFormStep();
+
+  if (showProgress) {
+    showUploadOverlay('Saving step', 'Preparing step save...');
+    updateProgress(12, 'Preparing step save...');
+  }
+
   const savedImageCandidate = String(payload.upload_image || '').trim();
   if (state.storageConfig.gcs_enabled && savedImageCandidate.startsWith('data:image')) {
     try {
+      updateProgress(28, 'Uploading step image...');
       const storagePath = await uploadStepImageToGcs(savedImageCandidate, state.currentIndex + 1);
       payload.upload_image = storagePath;
       state.program.steps[state.currentIndex].upload_image = storagePath;
@@ -1179,39 +1191,39 @@ async function saveStep(showProgress = true) {
       return false;
     }
   }
+
+  updateProgress(55, 'Saving step to server...');
   state.program.steps[state.currentIndex] = payload;
   try {
-    const responseData = showProgress
-      ? await requestJsonWithProgress(
-          `/api/steps/${state.currentIndex}`,
-          {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          },
-          'Saving step',
-          'Saving step...',
-          'Step saved'
-        )
-      : await (async () => {
-          const response = await fetch(`/api/steps/${state.currentIndex}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          if (!response.ok) {
-            throw new Error(await response.text());
-          }
-          return response.json();
-        })();
+    const response = await fetch(`/api/steps/${state.currentIndex}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
 
-    state.program = responseData && responseData.program ? responseData.program : responseData;
+    updateProgress(74, 'Loading latest data from server...');
+    const latestResponse = await fetch('/api/program');
+    if (!latestResponse.ok) {
+      throw new Error(await latestResponse.text());
+    }
+    const latestProgram = await latestResponse.json();
+
+    state.program = latestProgram && latestProgram.program ? latestProgram.program : latestProgram;
     if (savedImageCandidate) {
       state.lastSavedImage = savedImageCandidate;
     }
+
+    updateProgress(90, 'Refreshing screen...');
     syncProgramInfoToState();
     resetDirty();
     renderEditor();
+
+    // Keep loader visible until browser paints the refreshed server data.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    updateProgress(100, 'Step saved');
     return true;
   } catch (error) {
     alert(`Save failed: ${error}`);

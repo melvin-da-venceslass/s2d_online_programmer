@@ -3,7 +3,7 @@ substitutions:
   _REGION: us-central1
   _AR_REPO: cloud-run
   _GCS_BUCKET: "app_release_bucket"   # ← replace with your bucket name
-  _GCS_PREFIX: program-editor
+  _GCS_PREFIX: program_editor
   _RUN_SERVICE_ACCOUNT: "program-editor@mviis-docker.iam.gserviceaccount.com"
 
 steps:

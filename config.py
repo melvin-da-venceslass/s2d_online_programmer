@@ -49,7 +49,7 @@ class Settings:
     debug: bool = _as_bool("DEBUG", False)
 
     gcs_bucket_name: str = os.getenv("GCS_BUCKET_NAME", "").strip()
-    gcs_prefix: str = os.getenv("GCS_PREFIX", "program-editor").strip("/ ")
+    gcs_prefix: str = os.getenv("GCS_PREFIX", "program_editor").strip("/ ")
     gcs_key_file: str = os.getenv("GCS_KEY_FILE", "/app/bucket_key.json").strip()
     gcs_upload_expiry_seconds: int = _as_int("GCS_UPLOAD_EXPIRY_SECONDS", 900)
     gcs_direct_upload_threshold_bytes: int = _as_int(
