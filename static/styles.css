@@ -574,6 +574,25 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
   height: 34px;
 }
 
+.image-pip-file {
+  min-width: 180px;
+}
+
+.image-pip-slider {
+  width: 130px;
+}
+
+.image-pip-help {
+  display: inline-block;
+  font-size: .74rem;
+  line-height: 1.25;
+  color: #4f5e7a;
+  padding: .3rem .5rem;
+  border-radius: 8px;
+  background: #eef4ff;
+  border: 1px solid #d7e3fa;
+}
+
 .image-zoom-wrap {
   display: inline-flex;
   align-items: center;

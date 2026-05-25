@@ -630,6 +630,7 @@ function createCommonImageSection(step, index) {
     <option value="square">Square</option>
     <option value="circle">Circle</option>
     <option value="text">Text</option>
+    <option value="pip">Picture-in-Picture</option>
   `;
 
   const colorPicker = document.createElement('input');
@@ -692,6 +693,58 @@ function createCommonImageSection(step, index) {
   rotateRightBtn.type = 'button';
   rotateRightBtn.className = 'secondary';
   rotateRightBtn.textContent = 'Rotate Right';
+
+  const pipFileInput = document.createElement('input');
+  pipFileInput.type = 'file';
+  pipFileInput.accept = 'image/*';
+  pipFileInput.className = 'image-pip-file';
+  pipFileInput.title = 'Choose PiP image';
+
+  const pipCropZoom = document.createElement('input');
+  pipCropZoom.type = 'range';
+  pipCropZoom.min = '100';
+  pipCropZoom.max = '400';
+  pipCropZoom.step = '5';
+  pipCropZoom.value = '100';
+  pipCropZoom.className = 'image-pip-slider';
+  pipCropZoom.title = 'PiP crop zoom';
+  pipCropZoom.disabled = true;
+
+  const pipCropX = document.createElement('input');
+  pipCropX.type = 'range';
+  pipCropX.min = '0';
+  pipCropX.max = '100';
+  pipCropX.step = '1';
+  pipCropX.value = '50';
+  pipCropX.className = 'image-pip-slider';
+  pipCropX.title = 'PiP crop horizontal';
+  pipCropX.disabled = true;
+
+  const pipCropY = document.createElement('input');
+  pipCropY.type = 'range';
+  pipCropY.min = '0';
+  pipCropY.max = '100';
+  pipCropY.step = '1';
+  pipCropY.value = '50';
+  pipCropY.className = 'image-pip-slider';
+  pipCropY.title = 'PiP crop vertical';
+  pipCropY.disabled = true;
+
+  const pipApplyBtn = document.createElement('button');
+  pipApplyBtn.type = 'button';
+  pipApplyBtn.className = 'primary';
+  pipApplyBtn.textContent = 'Apply PiP';
+  pipApplyBtn.disabled = true;
+
+  const pipCancelBtn = document.createElement('button');
+  pipCancelBtn.type = 'button';
+  pipCancelBtn.className = 'secondary';
+  pipCancelBtn.textContent = 'Cancel PiP';
+  pipCancelBtn.disabled = true;
+
+  const pipHelp = document.createElement('span');
+  pipHelp.className = 'image-pip-help';
+  pipHelp.textContent = 'PiP: choose image -> click canvas to place -> drag blue handle to resize -> adjust crop sliders -> Apply PiP.';
 
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'image-canvas-wrap';
@@ -903,6 +956,136 @@ function createCommonImageSection(step, index) {
     pushHistory(true, true);
   }
 
+  const PIP_HANDLE_SIZE = 14;
+  let pipSourceImage = null;
+  let pipEdit = null;
+  let pipDragging = false;
+  let pipDragMode = '';
+  let pipDragOffsetX = 0;
+  let pipDragOffsetY = 0;
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function setPipControlsEnabled(enabled) {
+    const active = Boolean(enabled);
+    pipCropZoom.disabled = !active;
+    pipCropX.disabled = !active;
+    pipCropY.disabled = !active;
+    pipApplyBtn.disabled = !active;
+    pipCancelBtn.disabled = !active;
+  }
+
+  function drawPipIntoCanvas(targetCtx, overlay, drawFrame = false) {
+    if (!pipSourceImage || !overlay) return;
+
+    const zoom = Math.max(1, Number(overlay.cropZoom) || 1);
+    const srcW = pipSourceImage.width;
+    const srcH = pipSourceImage.height;
+    const cropW = clamp(Math.round(srcW / zoom), 1, srcW);
+    const cropH = clamp(Math.round(srcH / zoom), 1, srcH);
+    const maxCropX = Math.max(0, srcW - cropW);
+    const maxCropY = Math.max(0, srcH - cropH);
+    const sx = Math.round(maxCropX * (clamp(Number(overlay.cropX), 0, 1)));
+    const sy = Math.round(maxCropY * (clamp(Number(overlay.cropY), 0, 1)));
+
+    targetCtx.drawImage(
+      pipSourceImage,
+      sx,
+      sy,
+      cropW,
+      cropH,
+      overlay.x,
+      overlay.y,
+      overlay.w,
+      overlay.h
+    );
+
+    if (drawFrame) {
+      targetCtx.save();
+      targetCtx.strokeStyle = '#1a6bb5';
+      targetCtx.lineWidth = 2;
+      targetCtx.setLineDash([8, 5]);
+      targetCtx.strokeRect(overlay.x, overlay.y, overlay.w, overlay.h);
+      targetCtx.setLineDash([]);
+      targetCtx.fillStyle = '#1a6bb5';
+      targetCtx.fillRect(
+        overlay.x + overlay.w - PIP_HANDLE_SIZE,
+        overlay.y + overlay.h - PIP_HANDLE_SIZE,
+        PIP_HANDLE_SIZE,
+        PIP_HANDLE_SIZE
+      );
+      targetCtx.restore();
+    }
+  }
+
+  function renderPipPreview() {
+    if (!pipEdit) return;
+    ctx.putImageData(pipEdit.baseImageData, 0, 0);
+    drawPipIntoCanvas(ctx, pipEdit, true);
+  }
+
+  function beginPipEditAt(x, y) {
+    if (!pipSourceImage) {
+      alert('Choose PiP image first.');
+      return;
+    }
+
+    const defaultWidth = clamp(Math.round(canvas.width * 0.34), 80, canvas.width);
+    const aspect = pipSourceImage.height > 0 ? pipSourceImage.width / pipSourceImage.height : 1;
+    const defaultHeight = clamp(Math.round(defaultWidth / Math.max(aspect, 0.01)), 60, canvas.height);
+    const placedX = clamp(Math.round(x - defaultWidth / 2), 0, Math.max(0, canvas.width - defaultWidth));
+    const placedY = clamp(Math.round(y - defaultHeight / 2), 0, Math.max(0, canvas.height - defaultHeight));
+
+    pipEdit = {
+      baseImageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
+      x: placedX,
+      y: placedY,
+      w: defaultWidth,
+      h: defaultHeight,
+      cropZoom: Number(pipCropZoom.value) / 100,
+      cropX: Number(pipCropX.value) / 100,
+      cropY: Number(pipCropY.value) / 100,
+    };
+    setPipControlsEnabled(true);
+    renderPipPreview();
+  }
+
+  function pipHitMode(x, y) {
+    if (!pipEdit) return '';
+    const handleX = pipEdit.x + pipEdit.w - PIP_HANDLE_SIZE;
+    const handleY = pipEdit.y + pipEdit.h - PIP_HANDLE_SIZE;
+
+    if (x >= handleX && y >= handleY && x <= handleX + PIP_HANDLE_SIZE && y <= handleY + PIP_HANDLE_SIZE) {
+      return 'resize';
+    }
+    if (x >= pipEdit.x && y >= pipEdit.y && x <= pipEdit.x + pipEdit.w && y <= pipEdit.y + pipEdit.h) {
+      return 'move';
+    }
+    return '';
+  }
+
+  function applyPendingPip() {
+    if (!pipEdit) return;
+    ctx.putImageData(pipEdit.baseImageData, 0, 0);
+    drawPipIntoCanvas(ctx, pipEdit, false);
+    pipEdit = null;
+    pipDragging = false;
+    pipDragMode = '';
+    setPipControlsEnabled(false);
+    pushHistory(true, true);
+  }
+
+  function cancelPendingPip() {
+    if (!pipEdit) return;
+    ctx.putImageData(pipEdit.baseImageData, 0, 0);
+    pipEdit = null;
+    pipDragging = false;
+    pipDragMode = '';
+    setPipControlsEnabled(false);
+  }
+
   let drawing = false;
   let startX = 0;
   let startY = 0;
@@ -932,6 +1115,30 @@ function createCommonImageSection(step, index) {
   canvas.addEventListener('mousedown', (event) => {
     const pt = canvasPoint(event);
 
+    if (toolSelect.value === 'pip') {
+      if (!pipSourceImage) {
+        alert('Choose PiP image first.');
+        return;
+      }
+
+      if (!pipEdit) {
+        beginPipEditAt(pt.x, pt.y);
+        return;
+      }
+
+      const hitMode = pipHitMode(pt.x, pt.y);
+      if (!hitMode) {
+        beginPipEditAt(pt.x, pt.y);
+        return;
+      }
+
+      pipDragging = true;
+      pipDragMode = hitMode;
+      pipDragOffsetX = pt.x - pipEdit.x;
+      pipDragOffsetY = pt.y - pipEdit.y;
+      return;
+    }
+
     if (toolSelect.value === 'text') {
       const text = (textInput.value || '').trim();
       if (!text) {
@@ -952,6 +1159,22 @@ function createCommonImageSection(step, index) {
   });
 
   canvas.addEventListener('mousemove', (event) => {
+    if (toolSelect.value === 'pip') {
+      if (!pipDragging || !pipEdit) return;
+      const pt = canvasPoint(event);
+      if (pipDragMode === 'move') {
+        pipEdit.x = clamp(Math.round(pt.x - pipDragOffsetX), 0, Math.max(0, canvas.width - pipEdit.w));
+        pipEdit.y = clamp(Math.round(pt.y - pipDragOffsetY), 0, Math.max(0, canvas.height - pipEdit.h));
+      } else if (pipDragMode === 'resize') {
+        const newW = clamp(Math.round(pt.x - pipEdit.x), 24, canvas.width - pipEdit.x);
+        const newH = clamp(Math.round(pt.y - pipEdit.y), 24, canvas.height - pipEdit.y);
+        pipEdit.w = newW;
+        pipEdit.h = newH;
+      }
+      renderPipPreview();
+      return;
+    }
+
     if (!drawing || !snapshot) return;
     const pt = canvasPoint(event);
     ctx.putImageData(snapshot, 0, 0);
@@ -959,6 +1182,12 @@ function createCommonImageSection(step, index) {
   });
 
   canvas.addEventListener('mouseup', () => {
+    if (toolSelect.value === 'pip') {
+      pipDragging = false;
+      pipDragMode = '';
+      return;
+    }
+
     if (!drawing) return;
     drawing = false;
     snapshot = null;
@@ -966,6 +1195,12 @@ function createCommonImageSection(step, index) {
   });
 
   canvas.addEventListener('mouseleave', () => {
+    if (toolSelect.value === 'pip') {
+      pipDragging = false;
+      pipDragMode = '';
+      return;
+    }
+
     if (!drawing) return;
     drawing = false;
     snapshot = null;
@@ -1000,26 +1235,91 @@ function createCommonImageSection(step, index) {
     if (state.retainImageMode === 'saved') {
       state.lastSavedImage = '';
     }
+    pipSourceImage = null;
+    pipFileInput.value = '';
+    cancelPendingPip();
     resetCanvasBlank();
     pushHistory(true, false);
   });
 
   saveEditBtn.addEventListener('click', () => {
+    if (pipEdit) {
+      applyPendingPip();
+      return;
+    }
     pushHistory(true, true);
   });
 
   undoBtn.addEventListener('click', () => {
+    if (pipEdit) {
+      cancelPendingPip();
+      return;
+    }
     if (historyIndex <= 0) return;
     historyIndex -= 1;
     restoreFromHistory(historyIndex, true);
   });
 
   rotateLeftBtn.addEventListener('click', () => {
+    if (pipEdit) {
+      applyPendingPip();
+    }
     rotateCanvas(false);
   });
 
   rotateRightBtn.addEventListener('click', () => {
+    if (pipEdit) {
+      applyPendingPip();
+    }
     rotateCanvas(true);
+  });
+
+  pipFileInput.addEventListener('change', () => {
+    const [file] = pipFileInput.files || [];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const pipImg = new Image();
+      pipImg.onload = () => {
+        pipSourceImage = pipImg;
+        toolSelect.value = 'pip';
+      };
+      pipImg.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+
+  toolSelect.addEventListener('change', () => {
+    if (toolSelect.value !== 'pip' && pipEdit) {
+      applyPendingPip();
+    }
+    canvas.style.cursor = toolSelect.value === 'pip' ? 'move' : 'crosshair';
+  });
+
+  pipCropZoom.addEventListener('input', () => {
+    if (!pipEdit) return;
+    pipEdit.cropZoom = Number(pipCropZoom.value) / 100;
+    renderPipPreview();
+  });
+
+  pipCropX.addEventListener('input', () => {
+    if (!pipEdit) return;
+    pipEdit.cropX = Number(pipCropX.value) / 100;
+    renderPipPreview();
+  });
+
+  pipCropY.addEventListener('input', () => {
+    if (!pipEdit) return;
+    pipEdit.cropY = Number(pipCropY.value) / 100;
+    renderPipPreview();
+  });
+
+  pipApplyBtn.addEventListener('click', () => {
+    applyPendingPip();
+  });
+
+  pipCancelBtn.addEventListener('click', () => {
+    cancelPendingPip();
   });
 
   if (initialImageSrc) {
@@ -1031,7 +1331,26 @@ function createCommonImageSection(step, index) {
 
   setCanvasZoom(Number(zoomSlider.value));
 
-  controls.append(fileInput, toolSelect, colorPicker, textInput, textSize, zoomWrap, saveEditBtn, undoBtn, rotateLeftBtn, rotateRightBtn, clearBtn);
+  controls.append(
+    fileInput,
+    toolSelect,
+    colorPicker,
+    textInput,
+    textSize,
+    zoomWrap,
+    pipFileInput,
+    pipCropZoom,
+    pipCropX,
+    pipCropY,
+    pipApplyBtn,
+    pipCancelBtn,
+    pipHelp,
+    saveEditBtn,
+    undoBtn,
+    rotateLeftBtn,
+    rotateRightBtn,
+    clearBtn
+  );
   panel.append(retainModeRow, controls, canvasWrap, hidden);
   sectionEl.appendChild(panel);
   return sectionEl;
