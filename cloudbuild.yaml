@@ -52,7 +52,7 @@ steps:
       - --service-account
       - ${_RUN_SERVICE_ACCOUNT}
       - --set-env-vars
-      - GCS_BUCKET_NAME=${_GCS_BUCKET},GCS_PREFIX=${_GCS_PREFIX}
+      - MONGODB_URI=mongodb+srv://mviis_admin:d5uNysSB0uiYT3pK@mviis.bbuf8.mongodb.net/myFirstDatabase?retryWrites=true,MONGODB_DB_NAME=program_editor,DEFAULT_SUPER_ADMIN_USERNAME=mviis,DEFAULT_SUPER_ADMIN_PASSWORD=mviis,GCS_BUCKET_NAME=${_GCS_BUCKET},GCS_PREFIX=${_GCS_PREFIX}
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:$COMMIT_SHA
