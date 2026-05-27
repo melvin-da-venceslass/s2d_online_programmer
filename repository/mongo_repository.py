@@ -26,12 +26,14 @@ class AdminRepository:
 
         if self._mongo_enabled:
             try:
+                print(mongo_uri)
                 client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2500)
                 client.admin.command("ping")
                 self._db = client[db_name]
                 self._ensure_indexes()
-            except Exception:
+            except Exception as e:
                 # Fall back to in-memory mode if Mongo is not reachable.
+                print(f"[WARNING] Could not connect to MongoDB: {e}. Falling back to in-memory mode.")
                 self._mongo_enabled = False
                 self._db = None
 
