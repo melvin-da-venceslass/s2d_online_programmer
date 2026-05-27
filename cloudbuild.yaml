@@ -19,6 +19,13 @@ steps:
           --location=${_REGION} \
           --description="Docker repository for Cloud Run deployments"
     env:
+      - APP_NAME=Program Editor
+      - DEBUG=false
+      - GCS_BUCKET_NAME=app_release_bucket
+      - GCS_PREFIX=program-editor
+      - GCS_KEY_FILE=/app/key.json
+      - GCS_UPLOAD_EXPIRY_SECONDS=900
+      - GCS_DIRECT_UPLOAD_THRESHOLD_BYTES=20971520
       - MONGODB_URI=mongodb+srv://mviis_admin:d5uNysSB0uiYT3pK@mviis.bbuf8.mongodb.net/myFirstDatabase?retryWrites=true
       - MONGODB_DB_NAME=program_editor
       - DEFAULT_SUPER_ADMIN_USERNAME=mviis
@@ -52,7 +59,7 @@ steps:
       - --service-account
       - ${_RUN_SERVICE_ACCOUNT}
       - --set-env-vars
-      - MONGODB_URI=mongodb+srv://mviis_admin:d5uNysSB0uiYT3pK@mviis.bbuf8.mongodb.net/myFirstDatabase?retryWrites=true,MONGODB_DB_NAME=program_editor,DEFAULT_SUPER_ADMIN_USERNAME=mviis,DEFAULT_SUPER_ADMIN_PASSWORD=mviis,GCS_BUCKET_NAME=${_GCS_BUCKET},GCS_PREFIX=${_GCS_PREFIX}
+      - APP_NAME=Program Editor,DEBUG=false,GCS_BUCKET_NAME=app_release_bucket,GCS_PREFIX=program-editor,GCS_KEY_FILE=/app/key.json,GCS_UPLOAD_EXPIRY_SECONDS=900,GCS_DIRECT_UPLOAD_THRESHOLD_BYTES=20971520,MONGODB_URI=mongodb+srv://mviis_admin:d5uNysSB0uiYT3pK@mviis.bbuf8.mongodb.net/myFirstDatabase?retryWrites=true,MONGODB_DB_NAME=program_editor,DEFAULT_SUPER_ADMIN_USERNAME=mviis,DEFAULT_SUPER_ADMIN_PASSWORD=mviis
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:$COMMIT_SHA
