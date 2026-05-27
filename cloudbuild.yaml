@@ -18,6 +18,11 @@ steps:
           --repository-format=docker \
           --location=${_REGION} \
           --description="Docker repository for Cloud Run deployments"
+    env:
+      - MONGODB_URI=mongodb+srv://mviis_admin:d5uNysSB0uiYT3pK@mviis.bbuf8.mongodb.net/myFirstDatabase?retryWrites=true
+      - MONGODB_DB_NAME=program_editor
+      - DEFAULT_SUPER_ADMIN_USERNAME=mviis
+      - DEFAULT_SUPER_ADMIN_PASSWORD=mviis
 
   - name: gcr.io/cloud-builders/docker
     args:
