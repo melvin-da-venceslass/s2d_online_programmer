@@ -57,5 +57,12 @@ class Settings:
         20 * 1024 * 1024,
     )
 
+    mongodb_uri: str = os.getenv("MONGODB_URI", "").strip()
+    mongodb_db_name: str = os.getenv("MONGODB_DB_NAME", "program_editor").strip()
+    admin_session_timeout_minutes: int = _as_int("ADMIN_SESSION_TIMEOUT_MINUTES", 30)
+
+    default_super_admin_username: str = os.getenv("DEFAULT_SUPER_ADMIN_USERNAME", "mviis").strip()
+    default_super_admin_password: str = os.getenv("DEFAULT_SUPER_ADMIN_PASSWORD", "mviis").strip()
+
 
 settings = Settings()

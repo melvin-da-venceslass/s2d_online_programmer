@@ -8,19 +8,60 @@
   <link rel="stylesheet" href="/static/preview.css" />
 </head>
 <body class="preview-body">
-  <header class="topbar preview-topbar">
-    <div>
-      <p class="eyebrow">Step Preview</p>
-      <h1 id="preview-partname">Program</h1>
-      <p id="preview-count" class="subtitle"></p>
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
     </div>
-    <div class="topbar-actions">
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link" href="/" id="nav-editor">Editor</a></li>
+      <li><a class="app-nav-link" href="/admin" id="nav-admin">Admin Console</a></li>
+      <li><a class="app-nav-link is-active" href="/preview" id="nav-preview">Preview</a></li>
+    </ul>
+    <div class="app-nav-toolbar">
       <button id="refresh-preview-btn" class="secondary">Refresh</button>
     </div>
-  </header>
+  </nav>
 
   <main class="preview-layout">
+    <aside class="preview-sidebar">
+      <section class="card">
+        <h2>Load Part</h2>
+        <label>Organization
+          <select id="preview-load-org-select"><option value="">-- Organization --</option></select>
+        </label>
+        <label>Branch
+          <select id="preview-load-branch-select"><option value="">-- Branch --</option></select>
+        </label>
+        <label>Project
+          <select id="preview-load-project-select"><option value="">-- Project --</option></select>
+        </label>
+        <label>Line
+          <select id="preview-load-line-select"><option value="">-- Line --</option></select>
+        </label>
+        <label>Station
+          <select id="preview-load-station-select"><option value="">-- Station --</option></select>
+        </label>
+        <label>Part / Recipe
+          <select id="preview-load-recipe-select"><option value="">-- Select Part --</option></select>
+        </label>
+        <button id="preview-load-part-btn" class="primary full" type="button">Load Part</button>
+        <p id="preview-load-part-status" class="recipe-status"></p>
+      </section>
+    </aside>
+
     <section class="preview-card">
+      <div class="preview-page-head">
+        <div>
+          <p class="eyebrow">Step Preview</p>
+          <h1 id="preview-partname">Program</h1>
+          <p id="preview-count" class="subtitle"></p>
+        </div>
+      </div>
+
       <div class="preview-header">
         <h2 id="preview-step-title">Step 1</h2>
         <p id="preview-mode" class="mode-summary"></p>

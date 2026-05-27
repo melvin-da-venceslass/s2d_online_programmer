@@ -1,3 +1,45 @@
+const AUTH_TOKEN_KEY = 'admin_token';
+const AUTH_EXPIRY_KEY = 'admin_expiry_epoch_ms';
+
+function clearAuthAndRedirect() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_EXPIRY_KEY);
+  if (window.location.pathname !== '/admin') {
+    window.location.href = '/admin';
+  }
+}
+
+function installAuthFetchGuard() {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  const expiryEpochMs = Number(localStorage.getItem(AUTH_EXPIRY_KEY) || '0');
+
+  if (!token || !Number.isFinite(expiryEpochMs) || Date.now() >= expiryEpochMs) {
+    clearAuthAndRedirect();
+    return;
+  }
+
+  const timeoutMs = Math.max(0, expiryEpochMs - Date.now());
+  window.setTimeout(() => {
+    clearAuthAndRedirect();
+  }, timeoutMs);
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('X-Admin-Token')) {
+      headers.set('X-Admin-Token', token);
+    }
+    const response = await nativeFetch(input, { ...init, headers, credentials: 'same-origin' });
+    if (response.status === 401) {
+      clearAuthAndRedirect();
+      throw new Error('Session expired. Please login again.');
+    }
+    return response;
+  };
+}
+
+installAuthFetchGuard();
+
 const STEP_FIELDS = [
   {
     title: "Barcode",
@@ -49,8 +91,16 @@ const STEP_FIELDS = [
   },
 ];
 
+const FULL_ROW_FIELD_KEYS = new Set(['remarks', 'screw_info', 'ack_title', 'bc_title']);
+const IMAGE_PRELOAD_CACHE = new Map();
+
 const state = {
   program: window.INITIAL_PROGRAM,
+  editorUnlocked: false,
+  imagePanelCollapsed: false,
+  partRecipeCollapsed: false,
+  mapDeviceCollapsed: false,
+  stepsCollapsed: false,
   currentIndex: 0,
   dirty: false,
   saving: false,
@@ -60,6 +110,7 @@ const state = {
   lastSavedImage: '',
   stepClipboard: null,
   serverPrograms: [],
+  editorTree: null,
   storageConfig: {
     gcs_enabled: false,
     direct_upload_threshold_bytes: 20 * 1024 * 1024,
@@ -67,11 +118,12 @@ const state = {
 };
 
 const els = {
+  sessionInfo: document.getElementById('session-info'),
+  navAdmin: document.getElementById('nav-admin'),
+  logoutBtn: document.getElementById('logout-btn'),
   partname: document.getElementById('partname'),
-  programSelect: document.getElementById('program-select'),
   enableMes: document.getElementById('enable_mes'),
   enableFtp: document.getElementById('enable_ftp'),
-  applyProgramBtn: document.getElementById('apply-program-btn'),
   previewStepsBtn: document.getElementById('preview-steps-btn'),
   saveProgramBtn: document.getElementById('save-program-btn'),
   downloadBtn: document.getElementById('download-btn'),
@@ -89,6 +141,11 @@ const els = {
   modeSummary: document.getElementById('mode-summary'),
   saveStepBtn: document.getElementById('save-step-btn'),
   formContainer: document.getElementById('form-container'),
+  editorWorkspace: document.getElementById('editor-workspace'),
+  imageSidePanel: document.getElementById('image-side-panel'),
+  imagePanelContent: document.getElementById('image-panel-content'),
+  toggleImagePanelBtn: document.getElementById('toggle-image-panel-btn'),
+  layout: document.querySelector('.layout'),
   editorPane: document.querySelector('.editor'),
   modeCardsWrap: document.querySelector('.mode-cards'),
   modeCards: Array.from(document.querySelectorAll('.mode-card')),
@@ -99,12 +156,404 @@ const els = {
   uploadProgressText: document.getElementById('upload-progress-text'),
   uploadOverlayPath: document.getElementById('upload-overlay-path'),
   uploadCancelBtn: document.getElementById('upload-cancel-btn'),
+  recipeDescription: document.getElementById('recipe-description'),
+  saveRecipeBtn: document.getElementById('save-recipe-btn'),
+  recipeStatus: document.getElementById('recipe-status'),
+  // Load Part pane
+  loadOrgSelect: document.getElementById('load-org-select'),
+  loadBranchSelect: document.getElementById('load-branch-select'),
+  loadProjectSelect: document.getElementById('load-project-select'),
+  loadLineSelect: document.getElementById('load-line-select'),
+  loadStationSelect: document.getElementById('load-station-select'),
+  loadRecipeSelect: document.getElementById('load-recipe-select'),
+  loadPartBtn: document.getElementById('load-part-btn'),
+  loadPartStatus: document.getElementById('load-part-status'),
+  // Map to Device section
+  mapOrgSelect: document.getElementById('map-org-select'),
+  mapBranchSelect: document.getElementById('map-branch-select'),
+  mapProjectSelect: document.getElementById('map-project-select'),
+  mapLineSelect: document.getElementById('map-line-select'),
+  mapStationSelect: document.getElementById('map-station-select'),
+  mapDeviceSelect: document.getElementById('map-device-select'),
+  mapDeviceBtn: document.getElementById('map-device-btn'),
+  mapStatus: document.getElementById('map-status'),
+  togglePartRecipeBtn: document.getElementById('toggle-part-recipe-btn'),
+  partRecipeContent: document.getElementById('part-recipe-content'),
+  toggleMapDeviceBtn: document.getElementById('toggle-map-device-btn'),
+  mapDeviceContent: document.getElementById('map-device-content'),
+  toggleStepsBtn: document.getElementById('toggle-steps-btn'),
+  stepsContent: document.getElementById('steps-content'),
 };
 
 const uploadState = {
   xhr: null,
   active: false,
 };
+
+const userSession = {
+  user: null,
+};
+
+function setRecipeStatus(message, type = '') {
+  if (!els.recipeStatus) return;
+  els.recipeStatus.textContent = message || '';
+  els.recipeStatus.className = `recipe-status ${type}`.trim();
+}
+
+function setLoadPartStatus(message, type = '') {
+  if (!els.loadPartStatus) return;
+  els.loadPartStatus.textContent = message || '';
+  els.loadPartStatus.className = `recipe-status ${type}`.trim();
+}
+
+function setMapStatus(message, type = '') {
+  if (!els.mapStatus) return;
+  els.mapStatus.textContent = message || '';
+  els.mapStatus.className = `recipe-status ${type}`.trim();
+}
+
+function setSidebarSectionCollapsed(sectionKey, collapsed) {
+  const isCollapsed = Boolean(collapsed);
+  const sectionMap = {
+    partRecipe: {
+      toggleBtn: els.togglePartRecipeBtn,
+      content: els.partRecipeContent,
+      stateKey: 'partRecipeCollapsed',
+    },
+    mapDevice: {
+      toggleBtn: els.toggleMapDeviceBtn,
+      content: els.mapDeviceContent,
+      stateKey: 'mapDeviceCollapsed',
+    },
+    steps: {
+      toggleBtn: els.toggleStepsBtn,
+      content: els.stepsContent,
+      stateKey: 'stepsCollapsed',
+    },
+  };
+
+  const section = sectionMap[sectionKey];
+  if (!section) return;
+
+  state[section.stateKey] = isCollapsed;
+  if (section.content) {
+    section.content.hidden = isCollapsed;
+    section.content.setAttribute('aria-hidden', String(isCollapsed));
+  }
+  if (section.toggleBtn) {
+    section.toggleBtn.textContent = isCollapsed ? 'Expand' : 'Collapse';
+    section.toggleBtn.setAttribute('aria-expanded', String(!isCollapsed));
+  }
+}
+
+function setEditorUnlocked(unlocked) {
+  state.editorUnlocked = Boolean(unlocked);
+  if (els.layout) {
+    els.layout.classList.toggle('editor-locked', !state.editorUnlocked);
+  }
+  if (els.editorPane) {
+    els.editorPane.hidden = !state.editorUnlocked;
+    els.editorPane.setAttribute('aria-hidden', String(!state.editorUnlocked));
+  }
+}
+
+function setImagePanelCollapsed(collapsed) {
+  state.imagePanelCollapsed = Boolean(collapsed);
+  if (els.editorWorkspace) {
+    els.editorWorkspace.classList.toggle('image-panel-collapsed', state.imagePanelCollapsed);
+  }
+  if (els.imageSidePanel) {
+    els.imageSidePanel.classList.toggle('is-collapsed', state.imagePanelCollapsed);
+  }
+  if (els.toggleImagePanelBtn) {
+    els.toggleImagePanelBtn.textContent = state.imagePanelCollapsed ? 'Expand' : 'Collapse';
+    els.toggleImagePanelBtn.setAttribute('aria-expanded', String(!state.imagePanelCollapsed));
+  }
+}
+
+function setImagePanelVisible(visible) {
+  const isVisible = Boolean(visible);
+  if (els.editorWorkspace) {
+    els.editorWorkspace.classList.toggle('no-image-panel', !isVisible);
+  }
+  if (els.imageSidePanel) {
+    els.imageSidePanel.hidden = !isVisible;
+    els.imageSidePanel.setAttribute('aria-hidden', String(!isVisible));
+  }
+  if (!isVisible) {
+    setImagePanelCollapsed(false);
+  }
+}
+
+function flattenEditorTree() {
+  const tree = state.editorTree;
+  const organizations = tree?.organizations || [];
+  const branches = [], projects = [], lines = [], stations = [], devices = [];
+  for (const org of organizations) {
+    for (const branch of org.branches || []) {
+      branches.push(branch);
+      for (const project of branch.projects || []) {
+        projects.push(project);
+        for (const line of project.lines || []) {
+          lines.push(line);
+          for (const station of line.stations || []) {
+            stations.push(station);
+            for (const device of station.devices || []) {
+              devices.push(device);
+            }
+          }
+        }
+      }
+    }
+  }
+  return { organizations, branches, projects, lines, stations, devices };
+}
+
+async function loadEditorTree() {
+  try {
+    const resp = await fetch('/api/admin/tree');
+    if (!resp.ok) return;
+    state.editorTree = await resp.json();
+    populateEditorOrgSelects();
+  } catch (_) {}
+}
+
+function populateEditorOrgSelects() {
+  const { organizations } = flattenEditorTree();
+  const orgsHtml = '<option value="">-- Organization --</option>' +
+    organizations.map(o => `<option value="${o.organization_id}">${o.name}</option>`).join('');
+  if (els.loadOrgSelect) els.loadOrgSelect.innerHTML = orgsHtml;
+  if (els.mapOrgSelect) els.mapOrgSelect.innerHTML = orgsHtml;
+}
+
+function attachEditorCascading(prefix) {
+  const get = id => document.getElementById(`${prefix}${id}`);
+  const orgSel     = get('org-select');
+  const branchSel  = get('branch-select');
+  const projectSel = get('project-select');
+  const lineSel    = get('line-select');
+  const stationSel = get('station-select');
+  const labels = ['Branch', 'Project', 'Line', 'Station'];
+  const reset = (...sels) => sels.forEach((s, i) => { if (s) s.innerHTML = `<option value="">-- ${labels[i]} --</option>`; });
+
+  if (orgSel) {
+    orgSel.addEventListener('change', () => {
+      const { branches } = flattenEditorTree();
+      const filtered = branches.filter(b => b.organization_id === orgSel.value);
+      if (branchSel) branchSel.innerHTML = '<option value="">-- Branch --</option>' + filtered.map(b => `<option value="${b.branch_id}">${b.name}</option>`).join('');
+      reset(projectSel, lineSel, stationSel);
+      if (prefix === 'load-') refreshLoadRecipeSelect();
+      if (prefix === 'map-') refreshMapDeviceSelect();
+    });
+  }
+  if (branchSel) {
+    branchSel.addEventListener('change', () => {
+      const { projects } = flattenEditorTree();
+      const filtered = projects.filter(p => p.branch_id === branchSel.value);
+      if (projectSel) projectSel.innerHTML = '<option value="">-- Project --</option>' + filtered.map(p => `<option value="${p.project_id}">${p.name}</option>`).join('');
+      reset(lineSel, stationSel);
+      if (prefix === 'load-') refreshLoadRecipeSelect();
+      if (prefix === 'map-') refreshMapDeviceSelect();
+    });
+  }
+  if (projectSel) {
+    projectSel.addEventListener('change', () => {
+      const { lines } = flattenEditorTree();
+      const filtered = lines.filter(l => l.project_id === projectSel.value);
+      if (lineSel) lineSel.innerHTML = '<option value="">-- Line --</option>' + filtered.map(l => `<option value="${l.line_id}">${l.name}</option>`).join('');
+      reset(stationSel);
+      if (prefix === 'load-') refreshLoadRecipeSelect();
+      if (prefix === 'map-') refreshMapDeviceSelect();
+    });
+  }
+  if (lineSel) {
+    lineSel.addEventListener('change', () => {
+      const { stations } = flattenEditorTree();
+      const filtered = stations.filter(s => s.line_id === lineSel.value);
+      if (stationSel) stationSel.innerHTML = '<option value="">-- Station --</option>' + filtered.map(s => `<option value="${s.station_id}">${s.name}</option>`).join('');
+      if (prefix === 'load-') refreshLoadRecipeSelect();
+      if (prefix === 'map-') refreshMapDeviceSelect();
+    });
+  }
+  if (stationSel) {
+    stationSel.addEventListener('change', () => {
+      if (prefix === 'load-') refreshLoadRecipeSelect();
+      if (prefix === 'map-') refreshMapDeviceSelect();
+    });
+  }
+}
+
+function refreshLoadRecipeSelect() {
+  if (!els.loadRecipeSelect) return;
+  const orgId     = els.loadOrgSelect?.value || '';
+  const branchId  = els.loadBranchSelect?.value || '';
+  const projectId = els.loadProjectSelect?.value || '';
+  const lineId    = els.loadLineSelect?.value || '';
+  const stationId = els.loadStationSelect?.value || '';
+  const recipes = (state.editorTree?.recipes || []).filter(r => {
+    if (orgId && r.organization_id !== orgId) return false;
+    if (branchId && r.branch_id && r.branch_id !== branchId) return false;
+    if (projectId && r.project_id && r.project_id !== projectId) return false;
+    if (lineId && r.line_id && r.line_id !== lineId) return false;
+    if (stationId && r.station_id && r.station_id !== stationId) return false;
+    return true;
+  });
+  els.loadRecipeSelect.innerHTML = '<option value="">-- Select Part --</option>' +
+    recipes.map(r => `<option value="${r.recipe_id}" data-desc="${r.description || ''}">${r.name || 'Unnamed'}</option>`).join('');
+}
+
+function refreshMapDeviceSelect() {
+  if (!els.mapDeviceSelect) return;
+  const stationId = els.mapStationSelect?.value || '';
+  if (!stationId) {
+    els.mapDeviceSelect.innerHTML = '<option value="">-- select station first --</option>';
+    return;
+  }
+  const { devices } = flattenEditorTree();
+  const stationDevices = devices.filter(d => d.station_id === stationId);
+  els.mapDeviceSelect.innerHTML = '<option value="">-- Device --</option>' +
+    stationDevices.map(d => `<option value="${d.device_id}">${d.name} (${d.device_code})</option>`).join('');
+}
+
+async function loadPartFromRecipe() {
+  if (!els.loadRecipeSelect?.value) {
+    setLoadPartStatus('Select a part / recipe first.', 'error');
+    return;
+  }
+  if (state.dirty && !confirm('Unsaved changes will be lost. Continue?')) return;
+  const recipe = (state.editorTree?.recipes || []).find(r => r.recipe_id === els.loadRecipeSelect.value);
+  if (!recipe?.payload) {
+    setLoadPartStatus('Recipe has no program data.', 'error');
+    return;
+  }
+
+  showUploadOverlay('Loading Part', `Loading ${recipe.name || 'part'}...`);
+  setUploadOverlayProgress(10, 'Preparing program data...');
+
+  try {
+    state.program = deepClone(recipe.payload);
+    if (!Array.isArray(state.program.steps) || !state.program.steps.length) {
+      state.program.steps = [blankStep()];
+    }
+
+    const imageSources = collectProgramImageSources(state.program);
+    if (imageSources.length > 0) {
+      setUploadOverlayProgress(30, 'Preloading first step image...');
+      await preloadImageSource(imageSources[0]);
+    }
+
+    state.currentIndex = 0;
+    resetDirty();
+    setEditorUnlocked(true);
+    renderEditor();
+    if (els.recipeDescription) els.recipeDescription.value = recipe.description || '';
+    setLoadPartStatus(`Loaded: ${recipe.name}`, 'ok');
+
+    if (imageSources.length > 1) {
+      preloadProgramImages(state.program).catch(() => {
+      });
+      return;
+    }
+
+    setUploadOverlayProgress(100, 'Part loaded');
+  } catch (error) {
+    setLoadPartStatus(`Load failed: ${error}`, 'error');
+  } finally {
+    hideUploadOverlay();
+  }
+}
+
+async function mapRecipeToDevice() {
+  const deviceId = els.mapDeviceSelect?.value;
+  if (!deviceId) {
+    setMapStatus('Select a device first.', 'error');
+    return;
+  }
+  const recipeName = (els.partname?.value || '').trim();
+  if (!recipeName) {
+    setMapStatus('Save a part / recipe first (part name is required).', 'error');
+    return;
+  }
+  try {
+    const resp = await fetch('/api/admin/recipe-device-map', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipe_name: recipeName, device_id: deviceId }),
+    });
+    if (!resp.ok) {
+      setMapStatus(`Failed: ${await resp.text()}`, 'error');
+      return;
+    }
+    setMapStatus(`Mapped '${recipeName}' to device.`, 'ok');
+  } catch (err) {
+    setMapStatus(String(err), 'error');
+  }
+}
+
+async function loadUserSession() {
+  const response = await fetch('/api/admin/me');
+  if (!response.ok) {
+    throw new Error('Failed to load current user session');
+  }
+  const payload = await response.json();
+  userSession.user = payload.user || null;
+
+  const role = userSession.user?.role || 'unknown';
+  const username = userSession.user?.username || 'user';
+  if (els.sessionInfo) {
+    els.sessionInfo.textContent = `${username} (${role})`;
+  }
+
+  if (els.navAdmin) {
+    els.navAdmin.style.display = role === 'super_admin' || role === 'admin' ? '' : 'none';
+  }
+}
+
+async function logoutAndRedirect() {
+  try {
+    await fetch('/api/admin/logout', { method: 'POST' });
+  } catch (_error) {
+  }
+  clearAuthAndRedirect();
+}
+
+async function refreshRecipeSelect() {
+  // Replaced by hierarchy-filtered load; refresh the full tree
+  await loadEditorTree();
+}
+
+async function upsertRecipeRecord() {
+  const recipeName = (els.partname?.value || '').trim();
+  if (!recipeName) {
+    setRecipeStatus('Enter a part name first.', 'error');
+    return;
+  }
+
+  syncProgramInfoToState();
+  const payloadProgram = deepClone(buildDownloadPayload());
+  payloadProgram.partname = recipeName;
+
+  const response = await fetch('/api/editor/recipes/upsert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: recipeName,
+      description: (els.recipeDescription?.value || '').trim(),
+      program: payloadProgram,
+    }),
+  });
+
+  if (!response.ok) {
+    setRecipeStatus(`Save failed: ${await response.text()}`, 'error');
+    return;
+  }
+
+  setRecipeStatus(`Part '${recipeName}' saved.`, 'ok');
+  resetDirty();
+  setEditorUnlocked(true);
+  renderEditor();
+  await loadEditorTree();
+}
 
 function applyEditorModeTheme(step) {
   if (!els.editorPane) return;
@@ -133,6 +582,87 @@ function deepClone(value) {
 function sanitizeFilename(value) {
   const cleaned = String(value || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^[_\.]+|[_\.]+$/g, '');
   return cleaned || 'program';
+}
+
+function resolveImageSource(value, partnameHint = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('data:image')) return raw;
+
+  const normalized = raw.replace(/\\/g, '/');
+  if (normalized.startsWith('/programs/')) return normalized;
+  if (normalized.startsWith('programs/')) return `/${normalized}`;
+
+  if (/^https?:\/\//i.test(normalized)) {
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.pathname.startsWith('/programs/')) {
+        return `${parsed.pathname}${parsed.search || ''}`;
+      }
+    } catch (_error) {
+    }
+    return normalized;
+  }
+
+  if (/^[^/]+\/[^/]+$/i.test(normalized)) {
+    return `/programs/${normalized}`;
+  }
+
+  if (/^[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(normalized)) {
+    return `/programs/${sanitizeFilename(partnameHint || state.program.partname)}/imgs/${normalized}`;
+  }
+
+  return normalized;
+}
+
+function preloadImageSource(src) {
+  const resolved = String(src || '').trim();
+  if (!resolved || resolved.startsWith('data:image')) {
+    return Promise.resolve();
+  }
+  if (IMAGE_PRELOAD_CACHE.has(resolved)) {
+    return IMAGE_PRELOAD_CACHE.get(resolved);
+  }
+
+  const loadingPromise = new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve();
+    image.onerror = () => resolve();
+    image.src = resolved;
+  });
+
+  IMAGE_PRELOAD_CACHE.set(resolved, loadingPromise);
+  return loadingPromise;
+}
+
+function collectProgramImageSources(program) {
+  const steps = Array.isArray(program?.steps) ? program.steps : [];
+  const partName = program?.partname || '';
+  const sources = [];
+  const seen = new Set();
+
+  steps.forEach((step) => {
+    const resolved = resolveImageSource(step?.upload_image, step?.partname || partName);
+    if (!resolved || seen.has(resolved)) return;
+    seen.add(resolved);
+    sources.push(resolved);
+  });
+
+  return sources;
+}
+
+async function preloadProgramImages(program, onProgress) {
+  const sources = collectProgramImageSources(program);
+  if (!sources.length) return;
+
+  let completed = 0;
+  for (const source of sources) {
+    await preloadImageSource(source);
+    completed += 1;
+    if (onProgress) {
+      onProgress(completed, sources.length);
+    }
+  }
 }
 
 function retainedImageForAutoload() {
@@ -192,6 +722,8 @@ async function loadProgramFromServer(programFile) {
     state.program = responseData && responseData.program ? responseData.program : responseData;
     state.currentIndex = 0;
     resetDirty();
+    preloadProgramImages(state.program).catch(() => {
+    });
     renderEditor();
     await refreshProgramSelect();
   } catch (error) {
@@ -459,6 +991,9 @@ function renderStepList() {
 function createField(field, value, index) {
   const wrapper = document.createElement('div');
   wrapper.className = field.type === 'checkbox' ? 'field checkbox' : 'field';
+  if (FULL_ROW_FIELD_KEYS.has(field.key)) {
+    wrapper.classList.add('full-row');
+  }
 
   const inputId = `step-${index}-${field.key}`;
 
@@ -623,15 +1158,17 @@ function createCommonImageSection(step, index) {
   fileInput.accept = 'image/*';
   fileInput.id = `step-${index}-upload-image`;
 
-  const toolSelect = document.createElement('select');
-  toolSelect.className = 'image-tool-select';
-  toolSelect.innerHTML = `
-    <option value="rectangle">Rectangle</option>
-    <option value="square">Square</option>
-    <option value="circle">Circle</option>
-    <option value="text">Text</option>
-    <option value="pip">Picture-in-Picture</option>
-  `;
+  const TOOL_OPTIONS = [
+    { value: 'rectangle', label: 'Rectangle' },
+    { value: 'square', label: 'Square' },
+    { value: 'circle', label: 'Circle' },
+    { value: 'text', label: 'Text' },
+    { value: 'pip', label: 'Picture-in-Picture' },
+  ];
+  const toolButtonsWrap = document.createElement('div');
+  toolButtonsWrap.className = 'image-tool-buttons';
+  const toolButtons = new Map();
+  let selectedTool = 'rectangle';
 
   const colorPicker = document.createElement('input');
   colorPicker.type = 'color';
@@ -755,6 +1292,36 @@ function createCommonImageSection(step, index) {
   canvas.height = CANVAS_MAX_HEIGHT;
   canvasWrap.appendChild(canvas);
 
+  function updateCanvasCursor() {
+    canvas.style.cursor = selectedTool === 'pip' ? 'move' : 'crosshair';
+  }
+
+  function setSelectedTool(nextTool) {
+    if (!TOOL_OPTIONS.some((tool) => tool.value === nextTool)) return;
+    if (selectedTool === 'pip' && nextTool !== 'pip' && pipEdit) {
+      applyPendingPip();
+    }
+    selectedTool = nextTool;
+    toolButtons.forEach((button, tool) => {
+      const isActive = tool === selectedTool;
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+    });
+    updateCanvasCursor();
+  }
+
+  TOOL_OPTIONS.forEach((tool) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'image-tool-btn';
+    button.textContent = tool.label;
+    button.addEventListener('click', () => {
+      setSelectedTool(tool.value);
+    });
+    toolButtons.set(tool.value, button);
+    toolButtonsWrap.appendChild(button);
+  });
+
   const ctx = canvas.getContext('2d');
   const MAX_HISTORY = 30;
   let history = [];
@@ -781,40 +1348,7 @@ function createCommonImageSection(step, index) {
   });
 
   function resolveStoredImageSrc(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return '';
-    if (raw.startsWith('data:image')) return raw;
-
-    const normalized = raw.replace(/\\/g, '/');
-    const cacheBuster = '?t=' + Date.now();
-    
-    if (normalized.startsWith('/programs/')) {
-      const sep = normalized.includes('?') ? '&' : '?';
-      return normalized + sep + 't=' + Date.now();
-    }
-    if (normalized.startsWith('programs/')) return `/${normalized}${cacheBuster}`;
-
-    if (/^https?:\/\//i.test(normalized)) {
-      try {
-        const parsed = new URL(normalized);
-        if (parsed.pathname.startsWith('/programs/')) {
-          const sep = parsed.search ? '&' : '?';
-          return `${parsed.pathname}${parsed.search || ''}${sep}t=${Date.now()}`;
-        }
-      } catch (_error) {
-      }
-      return normalized;
-    }
-
-    if (/^[^/]+\/[^/]+$/i.test(normalized)) {
-      return `/programs/${normalized}${cacheBuster}`;
-    }
-
-    if (/^[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(normalized)) {
-      return `/programs/${sanitizeFilename(step.partname || state.program.partname)}/imgs/${normalized}${cacheBuster}`;
-    }
-
-    return normalized;
+    return resolveImageSource(value, step.partname || state.program.partname);
   }
 
   function updateUndoButton() {
@@ -1100,11 +1634,11 @@ function createCommonImageSection(step, index) {
     const sx = w < 0 ? -size : size;
     const sy = h < 0 ? -size : size;
 
-    if (toolSelect.value === 'rectangle') {
+    if (selectedTool === 'rectangle') {
       ctx.strokeRect(x1, y1, w, h);
-    } else if (toolSelect.value === 'square') {
+    } else if (selectedTool === 'square') {
       ctx.strokeRect(x1, y1, sx, sy);
-    } else if (toolSelect.value === 'circle') {
+    } else if (selectedTool === 'circle') {
       const r = Math.sqrt(w * w + h * h);
       ctx.beginPath();
       ctx.arc(x1, y1, r, 0, Math.PI * 2);
@@ -1115,7 +1649,7 @@ function createCommonImageSection(step, index) {
   canvas.addEventListener('mousedown', (event) => {
     const pt = canvasPoint(event);
 
-    if (toolSelect.value === 'pip') {
+    if (selectedTool === 'pip') {
       if (!pipSourceImage) {
         alert('Choose PiP image first.');
         return;
@@ -1139,7 +1673,7 @@ function createCommonImageSection(step, index) {
       return;
     }
 
-    if (toolSelect.value === 'text') {
+    if (selectedTool === 'text') {
       const text = (textInput.value || '').trim();
       if (!text) {
         alert('Enter text before placing it on image.');
@@ -1159,7 +1693,7 @@ function createCommonImageSection(step, index) {
   });
 
   canvas.addEventListener('mousemove', (event) => {
-    if (toolSelect.value === 'pip') {
+    if (selectedTool === 'pip') {
       if (!pipDragging || !pipEdit) return;
       const pt = canvasPoint(event);
       if (pipDragMode === 'move') {
@@ -1182,7 +1716,7 @@ function createCommonImageSection(step, index) {
   });
 
   canvas.addEventListener('mouseup', () => {
-    if (toolSelect.value === 'pip') {
+    if (selectedTool === 'pip') {
       pipDragging = false;
       pipDragMode = '';
       return;
@@ -1195,7 +1729,7 @@ function createCommonImageSection(step, index) {
   });
 
   canvas.addEventListener('mouseleave', () => {
-    if (toolSelect.value === 'pip') {
+    if (selectedTool === 'pip') {
       pipDragging = false;
       pipDragMode = '';
       return;
@@ -1282,18 +1816,11 @@ function createCommonImageSection(step, index) {
       const pipImg = new Image();
       pipImg.onload = () => {
         pipSourceImage = pipImg;
-        toolSelect.value = 'pip';
+        setSelectedTool('pip');
       };
       pipImg.src = String(reader.result || '');
     };
     reader.readAsDataURL(file);
-  });
-
-  toolSelect.addEventListener('change', () => {
-    if (toolSelect.value !== 'pip' && pipEdit) {
-      applyPendingPip();
-    }
-    canvas.style.cursor = toolSelect.value === 'pip' ? 'move' : 'crosshair';
   });
 
   pipCropZoom.addEventListener('input', () => {
@@ -1330,10 +1857,11 @@ function createCommonImageSection(step, index) {
   }
 
   setCanvasZoom(Number(zoomSlider.value));
+  setSelectedTool(selectedTool);
 
   controls.append(
     fileInput,
-    toolSelect,
+    toolButtonsWrap,
     colorPicker,
     textInput,
     textSize,
@@ -1351,7 +1879,7 @@ function createCommonImageSection(step, index) {
     rotateRightBtn,
     clearBtn
   );
-  panel.append(retainModeRow, controls, canvasWrap, hidden);
+  panel.append(retainModeRow, canvasWrap, controls, hidden);
   sectionEl.appendChild(panel);
   return sectionEl;
 }
@@ -1359,15 +1887,22 @@ function createCommonImageSection(step, index) {
 function renderStepForm() {
   if (!hasSelectedStep()) {
     els.formContainer.innerHTML = '';
+    if (els.imagePanelContent) els.imagePanelContent.innerHTML = '';
+    setImagePanelVisible(false);
     return;
   }
   const step = state.program.steps[state.currentIndex];
   enforceBcRoleByStepNo(step, state.currentIndex + 1);
   els.formContainer.innerHTML = '';
+  if (els.imagePanelContent) els.imagePanelContent.innerHTML = '';
   const activeMode = getActiveMode(step);
+  const shouldShowImagePanel = Boolean(activeMode || step.upload_image || retainedImageForAutoload());
   if (!activeMode) {
-    if (step.upload_image || retainedImageForAutoload()) {
-      els.formContainer.appendChild(createCommonImageSection(step, state.currentIndex + 1));
+    if (shouldShowImagePanel && els.imagePanelContent) {
+      els.imagePanelContent.appendChild(createCommonImageSection(step, state.currentIndex + 1));
+      setImagePanelVisible(true);
+    } else {
+      setImagePanelVisible(false);
     }
     return;
   }
@@ -1407,7 +1942,12 @@ function renderStepForm() {
 
     els.formContainer.appendChild(sectionEl);
   });
-  els.formContainer.appendChild(createCommonImageSection(step, state.currentIndex + 1));
+  if (shouldShowImagePanel && els.imagePanelContent) {
+    els.imagePanelContent.appendChild(createCommonImageSection(step, state.currentIndex + 1));
+    setImagePanelVisible(true);
+  } else {
+    setImagePanelVisible(false);
+  }
 }
 
 function renderEditor() {
@@ -1575,11 +2115,16 @@ async function saveProgram() {
       'Program saved'
     );
     state.program = responseData && responseData.program ? responseData.program : responseData;
+    if (state.program && state.program.program) {
+      state.program = state.program.program;
+    }
+    setRecipeStatus(`Program and recipe '${state.program.partname || ''}' saved to storage and database.`, 'ok');
     resetDirty();
     renderEditor();
-    await refreshProgramSelect();
+    await loadEditorTree();
   } catch (error) {
     alert(`Program save failed: ${error}`);
+    setRecipeStatus(`Program save failed: ${error}`, 'error');
     return;
   } finally {
     hideUploadOverlay();
@@ -1830,6 +2375,9 @@ async function uploadProgram(file) {
 
   state.currentIndex = 0;
   resetDirty();
+  preloadProgramImages(state.program).catch(() => {
+  });
+  setEditorUnlocked(true);
   renderEditor();
   await refreshProgramSelect();
 }
@@ -1883,6 +2431,9 @@ async function uploadRecipeZip(file) {
 
   state.currentIndex = 0;
   resetDirty();
+  preloadProgramImages(state.program).catch(() => {
+  });
+  setEditorUnlocked(true);
   renderEditor();
   await refreshProgramSelect();
 }
@@ -1993,22 +2544,11 @@ function bindEvents() {
 
   els.saveStepBtn.addEventListener('click', saveStep);
   els.saveProgramBtn.addEventListener('click', saveProgram);
-  els.previewStepsBtn.addEventListener('click', () => {
-    window.open('/preview', '_blank', 'noopener,noreferrer');
-  });
-  els.applyProgramBtn.addEventListener('click', applyProgramInfo);
-  els.programSelect.addEventListener('change', async () => {
-    const selected = els.programSelect.value;
-    if (!selected) return;
-    if (state.dirty) {
-      await saveStep();
-      if (state.dirty) {
-        renderProgramSelect();
-        return;
-      }
-    }
-    await loadProgramFromServer(selected);
-  });
+  if (els.previewStepsBtn) {
+    els.previewStepsBtn.addEventListener('click', () => {
+      window.open('/preview', '_blank', 'noopener,noreferrer');
+    });
+  }
   els.downloadBtn.addEventListener('click', async (event) => {
     event.preventDefault();
     const payload = buildDownloadPayload();
@@ -2108,18 +2648,77 @@ function bindEvents() {
   els.partname.addEventListener('input', markDirty);
   els.enableMes.addEventListener('change', markDirty);
   els.enableFtp.addEventListener('change', markDirty);
+
+  if (els.logoutBtn) {
+    els.logoutBtn.addEventListener('click', logoutAndRedirect);
+  }
+
+  if (els.saveRecipeBtn) {
+    els.saveRecipeBtn.addEventListener('click', upsertRecipeRecord);
+  }
+
+  if (els.loadPartBtn) {
+    els.loadPartBtn.addEventListener('click', loadPartFromRecipe);
+  }
+
+  if (els.mapDeviceBtn) {
+    els.mapDeviceBtn.addEventListener('click', mapRecipeToDevice);
+  }
+
+  if (els.toggleImagePanelBtn) {
+    els.toggleImagePanelBtn.addEventListener('click', () => {
+      if (els.imageSidePanel?.hidden) return;
+      setImagePanelCollapsed(!state.imagePanelCollapsed);
+    });
+  }
+
+  if (els.togglePartRecipeBtn) {
+    els.togglePartRecipeBtn.addEventListener('click', () => {
+      setSidebarSectionCollapsed('partRecipe', !state.partRecipeCollapsed);
+    });
+  }
+
+  if (els.toggleMapDeviceBtn) {
+    els.toggleMapDeviceBtn.addEventListener('click', () => {
+      setSidebarSectionCollapsed('mapDevice', !state.mapDeviceCollapsed);
+    });
+  }
+
+  if (els.toggleStepsBtn) {
+    els.toggleStepsBtn.addEventListener('click', () => {
+      setSidebarSectionCollapsed('steps', !state.stepsCollapsed);
+    });
+  }
+
+  // Part / Recipe tab switching
+  document.querySelectorAll('.part-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.ptab;
+      document.querySelectorAll('.part-tab-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+      document.querySelectorAll('.part-tab-pane').forEach(p => p.classList.toggle('is-active', p.id === `${target}-pane`));
+    });
+  });
 }
 
-function init() {
+async function init() {
   state.program = isReloadNavigation() ? blankProgram() : deepClone(window.INITIAL_PROGRAM);
+  setEditorUnlocked(false);
+  setSidebarSectionCollapsed('partRecipe', false);
+  setSidebarSectionCollapsed('mapDevice', false);
+  setSidebarSectionCollapsed('steps', false);
   state.currentIndex = 0;
   state.lastSavedSnapshot = deepClone(state.program);
+  await loadUserSession();
+  await loadEditorTree();
+  attachEditorCascading('load-');
+  attachEditorCascading('map-');
   bindEvents();
   syncProgramInfoToState();
   updateProgramInfoFields();
+  preloadProgramImages(state.program).catch(() => {
+  });
   renderEditor();
   loadStorageConfig();
-  refreshProgramSelect();
 }
 
 init();

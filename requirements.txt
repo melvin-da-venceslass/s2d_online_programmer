@@ -4,3 +4,4 @@ python-multipart
 jinja2
 reportlab
 google-cloud-storage
+pymongo

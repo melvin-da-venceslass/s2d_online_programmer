@@ -10,43 +10,123 @@
   <script id="initial-program" type="application/json">{{ initial_program | safe }}</script>
   <script id="initial-step-template" type="application/json">{{ initial_step_template | safe }}</script>
 
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">Smart Assembly Guidance System Program Editor</p>
-      <h1>Program Editor V1.0</h1>
-      <p class="subtitle">Create, edit, insert, delete, and save Recipe data</p>
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
     </div>
-    <div class="topbar-actions">
-      <button id="preview-steps-btn" class="secondary">Preview Steps</button>
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link is-active" href="/" id="nav-editor">Editor</a></li>
+      <li><a class="app-nav-link" href="/admin" id="nav-admin">Admin Console</a></li>
+      <li><a class="app-nav-link" href="/preview" id="nav-preview">Preview</a></li>
+    </ul>
+    <div class="app-nav-toolbar">
+      <a id="download-btn" class="secondary" href="/download">↓ JSON</a>
+      <a id="download-recipe-btn" class="secondary" href="/download-recipe">↓ Recipe</a>
+      <button id="download-pdf-btn" class="secondary" hidden style="display:none;">↓ PDF</button>
+      <button id="download-wi-btn" class="secondary" style="display:none;" hidden>↓ WI</button>
       <button id="save-program-btn" class="primary">Save Program</button>
-      <a id="download-btn" class="secondary" href="/download">Download JSON</a>
-      <a id="download-recipe-btn" class="secondary" href="/download-recipe">Download Recipe</a>
-      <button id="download-pdf-btn" class="secondary" hidden style="display:none;">Download PDF</button>
-      <button id="download-wi-btn" class="secondary" style="display:none;" hidden>Download WI</button>
     </div>
-  </header>
+    <div class="app-nav-user">
+      <span id="session-info" class="nav-user-label">Loading...</span>
+      <button id="logout-btn" class="secondary" type="button">Sign out</button>
+    </div>
+  </nav>
 
-  <main class="layout">
+  <main class="layout editor-locked">
     <aside class="sidebar">
       <section class="card">
-        <h2>Program</h2>
-        <label>
-          Part Name
-          <input id="partname" type="text" />
-        </label>
-        <label>
-          Load Program From Server
-          <select id="program-select">
-            <option value="">-- Select Program --</option>
-          </select>
-        </label>
-        <label class="checkbox-row"><input id="enable_mes" type="checkbox" /> Enable MES</label>
-        <label class="checkbox-row"><input id="enable_ftp" type="checkbox" /> Enable FTP</label>
-        <button id="apply-program-btn" class="secondary full">Apply Program Info</button>
+        <div class="sidebar-section-head">
+          <h2 class="sidebar-title">Part / Recipe</h2>
+          <button id="toggle-part-recipe-btn" type="button" class="secondary sidebar-toggle-btn" aria-expanded="true">Collapse</button>
+        </div>
+
+        <div id="part-recipe-content" class="sidebar-collapsible-content">
+
+        <div class="part-tab-bar">
+          <button class="part-tab-btn is-active" data-ptab="new-part">New Part</button>
+          <button class="part-tab-btn" data-ptab="load-part">Load Part</button>
+        </div>
+
+        <!-- New Part pane -->
+        <div id="new-part-pane" class="part-tab-pane is-active">
+          <label>Part Name
+            <input id="partname" type="text" placeholder="Enter part name…" />
+          </label>
+          <label>Description
+            <input id="recipe-description" type="text" placeholder="Optional description" />
+          </label>
+          <label class="checkbox-row"><input id="enable_mes" type="checkbox" /> Enable MES</label>
+          <label class="checkbox-row"><input id="enable_ftp" type="checkbox" /> Enable FTP</label>
+          <button id="save-recipe-btn" class="primary full">Save Part / Recipe</button>
+          <p id="recipe-status" class="recipe-status"></p>
+        </div>
+
+        <!-- Load Part pane -->
+        <div id="load-part-pane" class="part-tab-pane">
+          <label>Organization
+            <select id="load-org-select"><option value="">-- Organization --</option></select>
+          </label>
+          <label>Branch
+            <select id="load-branch-select"><option value="">-- Branch --</option></select>
+          </label>
+          <label>Project
+            <select id="load-project-select"><option value="">-- Project --</option></select>
+          </label>
+          <label>Line
+            <select id="load-line-select"><option value="">-- Line --</option></select>
+          </label>
+          <label>Station
+            <select id="load-station-select"><option value="">-- Station --</option></select>
+          </label>
+          <label>Part / Recipe
+            <select id="load-recipe-select"><option value="">-- Select Part --</option></select>
+          </label>
+          <button id="load-part-btn" class="secondary full">Load Part</button>
+          <p id="load-part-status" class="recipe-status"></p>
+        </div>
+
+        <!-- Map to Device -->
+        <div class="part-map-section">
+          <div class="sidebar-section-head sidebar-section-head-sub">
+            <h3 class="sidebar-title">Map to Device</h3>
+            <button id="toggle-map-device-btn" type="button" class="secondary sidebar-toggle-btn" aria-expanded="true">Collapse</button>
+          </div>
+          <div id="map-device-content" class="sidebar-collapsible-content">
+          <label>Organization
+            <select id="map-org-select"><option value="">-- Organization --</option></select>
+          </label>
+          <label>Branch
+            <select id="map-branch-select"><option value="">-- Branch --</option></select>
+          </label>
+          <label>Project
+            <select id="map-project-select"><option value="">-- Project --</option></select>
+          </label>
+          <label>Line
+            <select id="map-line-select"><option value="">-- Line --</option></select>
+          </label>
+          <label>Station
+            <select id="map-station-select"><option value="">-- Station --</option></select>
+          </label>
+          <label>Device
+            <select id="map-device-select"><option value="">-- select station first --</option></select>
+          </label>
+          <button id="map-device-btn" class="secondary full">Map Recipe → Device</button>
+          <p id="map-status" class="recipe-status"></p>
+          </div>
+        </div>
+        </div>
       </section>
 
       <section class="card">
-        <h2>Steps</h2>
+        <div class="sidebar-section-head">
+          <h2 class="sidebar-title">Steps</h2>
+          <button id="toggle-steps-btn" type="button" class="secondary sidebar-toggle-btn" aria-expanded="true">Collapse</button>
+        </div>
+        <div id="steps-content" class="sidebar-collapsible-content">
         <div class="step-nav">
           <label>
             Step Number
@@ -68,10 +148,11 @@
         <div class="step-list-card">
           <ul id="step-list" class="step-list"></ul>
         </div>
+        </div>
       </section>
     </aside>
 
-    <section class="editor">
+    <section class="editor" hidden aria-hidden="true">
       <div class="editor-head">
         <div>
           <h2 id="step-title">Step 1</h2>
@@ -97,7 +178,16 @@
         </div>
       </div>
 
-      <div id="form-container" class="form-container"></div>
+      <div id="editor-workspace" class="editor-workspace no-image-panel">
+        <div id="form-container" class="form-container"></div>
+        <aside id="image-side-panel" class="image-side-panel" hidden aria-hidden="true">
+          <div class="image-side-panel-head">
+            <h3>Image Upload & Annotation</h3>
+            <button id="toggle-image-panel-btn" type="button" class="secondary">Collapse</button>
+          </div>
+          <div id="image-panel-content" class="image-panel-content"></div>
+        </aside>
+      </div>
     </section>
   </main>
 
