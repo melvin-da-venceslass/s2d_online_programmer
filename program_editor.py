@@ -572,41 +572,53 @@ def persist_program_locked() -> None:
     image_dir = PROGRAMS_DIR / part / "imgs"
     image_dir.mkdir(parents=True, exist_ok=True)
 
-    active_image_names = set()
-    for step in CURRENT_DATA.get("steps", []):
+    steps = CURRENT_DATA.get("steps", [])
+
+    # ── Phase 1: resolve every step's image bytes into memory ────────────────
+    # Reading ALL sources before writing prevents rename collisions when steps
+    # are reordered (e.g. swap: step 1↔2 would overwrite step 2's file before
+    # step 2 had a chance to read it).
+    resolved: Dict[int, Optional[bytes]] = {}  # step_no → image bytes or None
+    for step in steps:
         step_no = int(step.get("step_no", 0) or 0)
         if step_no <= 0:
+            resolved[step_no] = None
             continue
-        image_name = f"{step_no}.png"
-        image_path = image_dir / image_name
         image_value = step.get("upload_image", "")
-
         decoded = decode_image_data_url(image_value) if isinstance(image_value, str) else None
         if decoded is not None:
-            image_path.write_bytes(decoded)
-            step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
-            active_image_names.add(image_name)
+            resolved[step_no] = decoded
             continue
-
         if isinstance(image_value, str) and image_value.startswith("/programs/"):
             source_rel = image_value[len("/programs/"):]
             source_path = PROGRAMS_DIR / source_rel
-            if source_path.exists():
-                image_path.write_bytes(source_path.read_bytes())
-                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
-                active_image_names.add(image_name)
-            elif image_path.exists():
-                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
-                active_image_names.add(image_name)
-            else:
-                step["upload_image"] = ""
-            continue
+            resolved[step_no] = source_path.read_bytes() if source_path.exists() else None
+        else:
+            resolved[step_no] = None
 
-        if not image_value:
-            if image_path.exists():
-                image_path.unlink()
+    # ── Phase 2: write images and update step paths ───────────────────────────
+    active_image_names: set = set()
+    for step in steps:
+        step_no = int(step.get("step_no", 0) or 0)
+        if step_no <= 0:
+            step["upload_image"] = ""
+            continue
+        image_name = f"{step_no}.png"
+        image_path = image_dir / image_name
+        img_bytes = resolved.get(step_no)
+
+        if img_bytes is not None:
+            image_path.write_bytes(img_bytes)
+            step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
+            active_image_names.add(image_name)
+        elif image_path.exists():
+            # already on disk under the correct name (no move needed)
+            step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
+            active_image_names.add(image_name)
+        else:
             step["upload_image"] = ""
 
+    # ── Phase 3: remove orphaned image files ─────────────────────────────────
     for pattern in ("*.png", "*.jpg", "*.jpeg"):
         for existing in image_dir.glob(pattern):
             if existing.name not in active_image_names:
