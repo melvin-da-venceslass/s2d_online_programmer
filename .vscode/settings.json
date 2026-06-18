@@ -1,4 +1,10 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
-    "python-envs.defaultPackageManager": "ms-python.python:conda"
+    "python-envs.defaultPackageManager": "ms-python.python:conda",
+    "chat.tools.terminal.autoApprove": {
+        "/^& \"C:/Users/Melvin Venceslass/\\.conda/envs/py37_33bit/python\\.exe\" -c \"import main; print\\('IMPORT_OK'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
 }

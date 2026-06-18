@@ -1,44 +1,3 @@
-const AUTH_TOKEN_KEY = 'admin_token';
-const AUTH_EXPIRY_KEY = 'admin_expiry_epoch_ms';
-
-function clearAuthAndRedirect() {
-  localStorage.removeItem(AUTH_TOKEN_KEY);
-  localStorage.removeItem(AUTH_EXPIRY_KEY);
-  if (window.location.pathname !== '/admin') {
-    window.location.href = '/admin';
-  }
-}
-
-function installAuthFetchGuard() {
-  const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
-  const expiryEpochMs = Number(localStorage.getItem(AUTH_EXPIRY_KEY) || '0');
-
-  if (!token || !Number.isFinite(expiryEpochMs) || Date.now() >= expiryEpochMs) {
-    clearAuthAndRedirect();
-    return;
-  }
-
-  const timeoutMs = Math.max(0, expiryEpochMs - Date.now());
-  window.setTimeout(() => {
-    clearAuthAndRedirect();
-  }, timeoutMs);
-
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = async (input, init = {}) => {
-    const headers = new Headers(init.headers || {});
-    if (!headers.has('X-Admin-Token')) {
-      headers.set('X-Admin-Token', token);
-    }
-    const response = await nativeFetch(input, { ...init, headers, credentials: 'same-origin' });
-    if (response.status === 401) {
-      clearAuthAndRedirect();
-      throw new Error('Session expired. Please login again.');
-    }
-    return response;
-  };
-}
-
-installAuthFetchGuard();
 
 const STEP_FIELDS = [
   {
@@ -52,7 +11,10 @@ const STEP_FIELDS = [
       { key: "check_short_workstation", label: "Check Workstation", type: "text" },
       { key: "check_part_number", label: "Check Part Number", type: "text" },
       { key: "check_ref_designator", label: "Check Ref Designator", type: "text" },
-      { key: "enable_barcode_mes", label: "Enable Barcode MES", type: "checkbox" },
+      { key: "enable_barcode_mes_t", label: "Enable Barcode MES (T)", type: "checkbox" },
+      { key: "enable_barcode_mes_nt", label: "Enable Barcode MES (NT)", type: "checkbox" },
+      { key: "restart_on_failure", label: "Restart On Failure", type: "checkbox" },
+      { key: "reg_ex_validator", label: "Regex Validator", type: "text" },
     ]
   },
   {
@@ -91,7 +53,7 @@ const STEP_FIELDS = [
   },
 ];
 
-const FULL_ROW_FIELD_KEYS = new Set(['remarks', 'screw_info', 'ack_title', 'bc_title']);
+const FULL_ROW_FIELD_KEYS = new Set(['remarks', 'screw_info', 'ack_title', 'bc_title', 'reg_ex_validator']);
 const IMAGE_PRELOAD_CACHE = new Map();
 
 const state = {
@@ -112,7 +74,7 @@ const state = {
   serverPrograms: [],
   editorTree: null,
   storageConfig: {
-    gcs_enabled: false,
+    remote_storage_enabled: false,
     direct_upload_threshold_bytes: 20 * 1024 * 1024,
   },
 };
@@ -158,6 +120,7 @@ const els = {
   uploadCancelBtn: document.getElementById('upload-cancel-btn'),
   recipeDescription: document.getElementById('recipe-description'),
   saveRecipeBtn: document.getElementById('save-recipe-btn'),
+  newPartBtn: document.getElementById('new-part-btn'),
   recipeStatus: document.getElementById('recipe-status'),
   // Load Part pane
   loadOrgSelect: document.getElementById('load-org-select'),
@@ -310,12 +273,7 @@ function flattenEditorTree() {
 }
 
 async function loadEditorTree() {
-  try {
-    const resp = await fetch('/api/admin/tree');
-    if (!resp.ok) return;
-    state.editorTree = await resp.json();
-    populateEditorOrgSelects();
-  } catch (_) {}
+  // Admin tree removed
 }
 
 function populateEditorOrgSelects() {
@@ -416,105 +374,23 @@ function refreshMapDeviceSelect() {
 }
 
 async function loadPartFromRecipe() {
-  if (!els.loadRecipeSelect?.value) {
-    setLoadPartStatus('Select a part / recipe first.', 'error');
+  const programFile = els.loadRecipeSelect?.value;
+  if (!programFile) {
+    setLoadPartStatus('Select a program first.', 'error');
     return;
   }
   if (state.dirty && !confirm('Unsaved changes will be lost. Continue?')) return;
-  const recipe = (state.editorTree?.recipes || []).find(r => r.recipe_id === els.loadRecipeSelect.value);
-  if (!recipe?.payload) {
-    setLoadPartStatus('Recipe has no program data.', 'error');
-    return;
-  }
-
-  showUploadOverlay('Loading Part', `Loading ${recipe.name || 'part'}...`);
-  setUploadOverlayProgress(10, 'Preparing program data...');
-
-  try {
-    state.program = deepClone(recipe.payload);
-    if (!Array.isArray(state.program.steps) || !state.program.steps.length) {
-      state.program.steps = [blankStep()];
-    }
-
-    const imageSources = collectProgramImageSources(state.program);
-    if (imageSources.length > 0) {
-      setUploadOverlayProgress(30, 'Preloading first step image...');
-      await preloadImageSource(imageSources[0]);
-    }
-
-    state.currentIndex = 0;
-    resetDirty();
-    setEditorUnlocked(true);
-    renderEditor();
-    if (els.recipeDescription) els.recipeDescription.value = recipe.description || '';
-    setLoadPartStatus(`Loaded: ${recipe.name}`, 'ok');
-
-    if (imageSources.length > 1) {
-      preloadProgramImages(state.program).catch(() => {
-      });
-      return;
-    }
-
-    setUploadOverlayProgress(100, 'Part loaded');
-  } catch (error) {
-    setLoadPartStatus(`Load failed: ${error}`, 'error');
-  } finally {
-    hideUploadOverlay();
-  }
+  await loadProgramFromServer(programFile);
+  setLoadPartStatus(`Loaded: ${programFile}`, 'ok');
 }
 
 async function mapRecipeToDevice() {
-  const deviceId = els.mapDeviceSelect?.value;
-  if (!deviceId) {
-    setMapStatus('Select a device first.', 'error');
-    return;
-  }
-  const recipeName = (els.partname?.value || '').trim();
-  if (!recipeName) {
-    setMapStatus('Save a part / recipe first (part name is required).', 'error');
-    return;
-  }
-  try {
-    const resp = await fetch('/api/admin/recipe-device-map', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipe_name: recipeName, device_id: deviceId }),
-    });
-    if (!resp.ok) {
-      setMapStatus(`Failed: ${await resp.text()}`, 'error');
-      return;
-    }
-    setMapStatus(`Mapped '${recipeName}' to device.`, 'ok');
-  } catch (err) {
-    setMapStatus(String(err), 'error');
-  }
+  // Admin feature removed
+  setMapStatus('Device mapping is not available in this version.', 'error');
 }
 
 async function loadUserSession() {
-  const response = await fetch('/api/admin/me');
-  if (!response.ok) {
-    throw new Error('Failed to load current user session');
-  }
-  const payload = await response.json();
-  userSession.user = payload.user || null;
-
-  const role = userSession.user?.role || 'unknown';
-  const username = userSession.user?.username || 'user';
-  if (els.sessionInfo) {
-    els.sessionInfo.textContent = `${username} (${role})`;
-  }
-
-  if (els.navAdmin) {
-    els.navAdmin.style.display = role === 'super_admin' || role === 'admin' ? '' : 'none';
-  }
-}
-
-async function logoutAndRedirect() {
-  try {
-    await fetch('/api/admin/logout', { method: 'POST' });
-  } catch (_error) {
-  }
-  clearAuthAndRedirect();
+  // Auth removed — no-op
 }
 
 async function refreshRecipeSelect() {
@@ -523,36 +399,7 @@ async function refreshRecipeSelect() {
 }
 
 async function upsertRecipeRecord() {
-  const recipeName = (els.partname?.value || '').trim();
-  if (!recipeName) {
-    setRecipeStatus('Enter a part name first.', 'error');
-    return;
-  }
-
-  syncProgramInfoToState();
-  const payloadProgram = deepClone(buildDownloadPayload());
-  payloadProgram.partname = recipeName;
-
-  const response = await fetch('/api/editor/recipes/upsert', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: recipeName,
-      description: (els.recipeDescription?.value || '').trim(),
-      program: payloadProgram,
-    }),
-  });
-
-  if (!response.ok) {
-    setRecipeStatus(`Save failed: ${await response.text()}`, 'error');
-    return;
-  }
-
-  setRecipeStatus(`Part '${recipeName}' saved.`, 'ok');
-  resetDirty();
-  setEditorUnlocked(true);
-  renderEditor();
-  await loadEditorTree();
+  // Replaced by saveProgram — no-op here
 }
 
 function applyEditorModeTheme(step) {
@@ -680,23 +527,24 @@ function expectedProgramFileName() {
 }
 
 function renderProgramSelect() {
-  if (!els.programSelect) return;
+  const sel = els.loadRecipeSelect;
+  if (!sel) return;
   const selectedFile = expectedProgramFileName();
-  els.programSelect.innerHTML = '';
+  sel.innerHTML = '';
 
   const placeholder = document.createElement('option');
   placeholder.value = '';
   placeholder.textContent = '-- Select Program --';
-  els.programSelect.appendChild(placeholder);
+  sel.appendChild(placeholder);
 
   state.serverPrograms.forEach((name) => {
     const option = document.createElement('option');
     option.value = name;
-    option.textContent = name;
+    option.textContent = name.replace(/\.json$/i, '');
     if (name === selectedFile) {
       option.selected = true;
     }
-    els.programSelect.appendChild(option);
+    sel.appendChild(option);
   });
 }
 
@@ -745,7 +593,10 @@ function blankStep() {
     check_short_workstation: '',
     check_part_number: '',
     check_ref_designator: '',
-    enable_barcode_mes: false,
+    enable_barcode_mes_t: false,
+    enable_barcode_mes_nt: false,
+    restart_on_failure: false,
+    reg_ex_validator: '',
     ack_title: '',
     request_ack: false,
     enable_ack_mes: false,
@@ -1981,11 +1832,22 @@ function renderEditor() {
 
 function collectFormStep() {
   const step = deepClone(state.program.steps[state.currentIndex]);
+
+  // Collect fields from the form container (mode-specific fields)
   const inputs = els.formContainer.querySelectorAll('[data-key]');
   inputs.forEach((input) => {
     const key = input.dataset.key;
     step[key] = input.type === 'checkbox' ? input.checked : input.value;
   });
+
+  // Also collect upload_image from the image side panel (it lives outside formContainer)
+  if (els.imagePanelContent) {
+    const imageInput = els.imagePanelContent.querySelector('[data-key="upload_image"]');
+    if (imageInput) {
+      step['upload_image'] = imageInput.value || '';
+    }
+  }
+
   applyExclusiveModeFromStep(step, 'enable_barcode');
   if (!step.enable_barcode) {
     applyExclusiveModeFromStep(step, 'request_ack');
@@ -2038,18 +1900,6 @@ async function saveStep(showProgress = true) {
   }
 
   const savedImageCandidate = String(payload.upload_image || '').trim();
-  if (state.storageConfig.gcs_enabled && savedImageCandidate.startsWith('data:image')) {
-    try {
-      updateProgress(28, 'Uploading step image...');
-      const storagePath = await uploadStepImageToGcs(savedImageCandidate, state.currentIndex + 1);
-      payload.upload_image = storagePath;
-      state.program.steps[state.currentIndex].upload_image = storagePath;
-      state.lastSavedImage = storagePath;
-    } catch (error) {
-      alert(`Image upload failed: ${error}`);
-      return false;
-    }
-  }
 
   updateProgress(55, 'Saving step to server...');
   state.program.steps[state.currentIndex] = payload;
@@ -2118,7 +1968,7 @@ async function saveProgram() {
     if (state.program && state.program.program) {
       state.program = state.program.program;
     }
-    setRecipeStatus(`Program and recipe '${state.program.partname || ''}' saved to storage and database.`, 'ok');
+    setRecipeStatus(`Program '${state.program.partname || ''}' saved.`, 'ok');
     resetDirty();
     renderEditor();
     await loadEditorTree();
@@ -2132,19 +1982,10 @@ async function saveProgram() {
 }
 
 async function loadStorageConfig() {
-  try {
-    const response = await fetch('/api/storage-config');
-    if (!response.ok) {
-      return;
-    }
-    const payload = await response.json();
-    state.storageConfig = {
-      gcs_enabled: Boolean(payload.gcs_enabled),
-      direct_upload_threshold_bytes: Number(payload.direct_upload_threshold_bytes) || 20 * 1024 * 1024,
-    };
-  } catch (_) {
-    // Keep local upload flow as fallback when config endpoint is unavailable.
-  }
+  state.storageConfig = {
+    remote_storage_enabled: false,
+    direct_upload_threshold_bytes: 20 * 1024 * 1024,
+  };
 }
 
 function setUploadOverlayProgress(percent, message) {
@@ -2192,31 +2033,6 @@ function dataUrlToBlob(dataUrl) {
     bytes[index] = binary.charCodeAt(index);
   }
   return new Blob([bytes], { type: mimeType });
-}
-
-async function uploadStepImageToGcs(imageDataUrl, stepNo) {
-  const partname = sanitizeFilename(state.program?.partname || 'program');
-  const imageBlob = dataUrlToBlob(imageDataUrl);
-  const formData = new FormData();
-  formData.append('file', imageBlob, `${partname}_${stepNo}.png`);
-  formData.append('partname', partname);
-  formData.append('step_no', String(stepNo));
-
-  const response = await fetch('/api/upload-image-to-gcs', {
-    method: 'POST',
-    body: formData,
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
-  const payload = await response.json();
-  if (!payload || typeof payload !== 'object' || !payload.storage_path) {
-    throw new Error('Image upload did not return a bucket path');
-  }
-
-  return String(payload.storage_path);
 }
 
 function showUploadOverlay(title, message) {
@@ -2307,9 +2123,9 @@ function uploadFileWithProgress(endpoint, file, title) {
         const payload = xhr.responseText ? JSON.parse(xhr.responseText) : {};
         const uploadedProgram = payload && typeof payload === 'object' && payload.program ? payload.program : payload;
         if (payload && typeof payload === 'object' && payload.storage_path) {
-          setUploadOverlayPath(`Bucket path: ${payload.storage_path}`);
+          setUploadOverlayPath(`Storage path: ${payload.storage_path}`);
         }
-        setUploadOverlayProgress(100, `Finalizing ${fileLabel} in the bucket...`);
+        setUploadOverlayProgress(100, `Finalizing ${fileLabel}...`);
         resolve(uploadedProgram);
       } catch (error) {
         reject(error);
@@ -2324,44 +2140,9 @@ function uploadFileWithProgress(endpoint, file, title) {
   });
 }
 
-function putFileToUrlWithProgress(uploadUrl, file, title) {
-  return new Promise((resolve, reject) => {
-    const fileLabel = `${file.name} • ${formatFileSize(file.size)}`;
-
-    const xhr = new XMLHttpRequest();
-    uploadState.xhr = xhr;
-    xhr.open('PUT', uploadUrl);
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-    xhr.upload.addEventListener('progress', (event) => {
-      if (!event.lengthComputable) {
-        setUploadOverlayProgress(65, `Uploading ${fileLabel}...`);
-        return;
-      }
-      const percent = Math.min(98, (event.loaded / event.total) * 100);
-      setUploadOverlayProgress(percent, `Uploading ${fileLabel}...`);
-    });
-
-    xhr.addEventListener('load', () => {
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(xhr.responseText || `Upload failed (${xhr.status})`));
-        return;
-      }
-      setUploadOverlayProgress(100, `Uploaded ${fileLabel} to GCS...`);
-      resolve();
-    });
-
-    xhr.addEventListener('error', () => reject(new Error('Network error during upload.')));
-    xhr.addEventListener('abort', () => reject(new Error('Upload canceled.')));
-
-    showUploadOverlay(title || 'Uploading', `Preparing ${fileLabel}...`);
-    xhr.send(file);
-  });
-}
-
 async function uploadProgram(file) {
   try {
-    const endpoint = state.storageConfig.gcs_enabled ? '/api/upload-to-gcs' : '/api/upload';
+    const endpoint = '/api/upload';
     state.program = await uploadFileWithProgress(endpoint, file, 'Uploading program');
   } catch (error) {
     if (String(error).includes('canceled')) {
@@ -2384,41 +2165,8 @@ async function uploadProgram(file) {
 
 async function uploadRecipeZip(file) {
   try {
-    if (state.storageConfig.gcs_enabled) {
-      const sessionResponse = await fetch('/api/upload-recipe-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          size: file.size,
-          content_type: file.type || 'application/zip',
-        }),
-      });
-      if (!sessionResponse.ok) {
-        throw new Error(await sessionResponse.text());
-      }
-      const session = await sessionResponse.json();
-      if (!session || typeof session !== 'object' || !session.upload_url || !session.staging_blob_name) {
-        throw new Error('Failed to create upload session.');
-      }
-
-      await putFileToUrlWithProgress(session.upload_url, file, 'Uploading recipe');
-      setUploadOverlayProgress(100, 'Finalizing recipe in GCS...');
-
-      const finalizeResponse = await fetch('/api/finalize-recipe-upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ staging_blob_name: session.staging_blob_name }),
-      });
-      if (!finalizeResponse.ok) {
-        throw new Error(await finalizeResponse.text());
-      }
-      const payload = await finalizeResponse.json();
-      state.program = payload && typeof payload === 'object' && payload.program ? payload.program : payload;
-    } else {
-      const endpoint = '/api/upload-zip';
-      state.program = await uploadFileWithProgress(endpoint, file, 'Uploading recipe');
-    }
+    const endpoint = '/api/upload-zip';
+    state.program = await uploadFileWithProgress(endpoint, file, 'Uploading recipe');
   } catch (error) {
     if (String(error).includes('canceled')) {
       return;
@@ -2654,7 +2402,23 @@ function bindEvents() {
   }
 
   if (els.saveRecipeBtn) {
-    els.saveRecipeBtn.addEventListener('click', upsertRecipeRecord);
+    els.saveRecipeBtn.addEventListener('click', saveProgram);
+  }
+
+  if (els.newPartBtn) {
+    els.newPartBtn.addEventListener('click', () => {
+      if (state.dirty && !confirm('Unsaved changes will be lost. Continue?')) return;
+      state.program = blankProgram();
+      state.currentIndex = 0;
+      resetDirty();
+      if (els.partname) els.partname.value = '';
+      if (els.recipeDescription) els.recipeDescription.value = '';
+      if (els.enableMes) els.enableMes.checked = false;
+      if (els.enableFtp) els.enableFtp.checked = false;
+      setRecipeStatus('', '');
+      setEditorUnlocked(true);
+      renderEditor();
+    });
   }
 
   if (els.loadPartBtn) {
@@ -2702,19 +2466,16 @@ function bindEvents() {
 
 async function init() {
   state.program = isReloadNavigation() ? blankProgram() : deepClone(window.INITIAL_PROGRAM);
-  setEditorUnlocked(false);
+  const hasProgram = state.program && Array.isArray(state.program.steps) && state.program.steps.length > 0;
+  setEditorUnlocked(hasProgram);
   setSidebarSectionCollapsed('partRecipe', false);
-  setSidebarSectionCollapsed('mapDevice', false);
   setSidebarSectionCollapsed('steps', false);
   state.currentIndex = 0;
   state.lastSavedSnapshot = deepClone(state.program);
-  await loadUserSession();
-  await loadEditorTree();
-  attachEditorCascading('load-');
-  attachEditorCascading('map-');
   bindEvents();
   syncProgramInfoToState();
   updateProgramInfoFields();
+  await refreshProgramSelect();
   preloadProgramImages(state.program).catch(() => {
   });
   renderEditor();

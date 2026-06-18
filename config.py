@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,35 @@ def _as_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _resolve_programs_dir() -> str:
+    """
+    Priority:
+      1. PROGRAMS_DIR env var (explicit override, any platform)
+      2. Platform-specific env var: WIN_PROGRAMS_DIR / LINUX_PROGRAMS_DIR / MAC_PROGRAMS_DIR
+      3. Hardcoded per-platform default
+    """
+    explicit = os.getenv("PROGRAMS_DIR", "").strip()
+    if explicit:
+        return explicit
+
+    platform = sys.platform  # 'win32', 'linux', 'darwin'
+
+    if platform == "win32":
+        val = os.getenv("WIN_PROGRAMS_DIR", "").strip()
+        return val if val else r"C:\Users\Melvin Venceslass\APP_ENV\programs"
+
+    if platform == "darwin":
+        val = os.getenv("MAC_PROGRAMS_DIR", "").strip()
+        if val:
+            return val
+        # default: <project_dir>/programs for macOS when not set
+        return str(Path(__file__).resolve().parent / "programs")
+
+    # linux and everything else
+    val = os.getenv("LINUX_PROGRAMS_DIR", "").strip()
+    return val if val else "/home/mviis/programs"
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "Program Editor")
@@ -48,21 +78,8 @@ class Settings:
     port: int = _as_int("PORT", 8080)
     debug: bool = _as_bool("DEBUG", False)
 
-    gcs_bucket_name: str = os.getenv("GCS_BUCKET_NAME", "").strip()
-    gcs_prefix: str = os.getenv("GCS_PREFIX", "program_editor").strip("/ ")
-    gcs_key_file: str = os.getenv("GCS_KEY_FILE", "/app/bucket_key.json").strip()
-    gcs_upload_expiry_seconds: int = _as_int("GCS_UPLOAD_EXPIRY_SECONDS", 900)
-    gcs_direct_upload_threshold_bytes: int = _as_int(
-        "GCS_DIRECT_UPLOAD_THRESHOLD_BYTES",
-        20 * 1024 * 1024,
-    )
-
-    mongodb_uri: str = os.getenv("MONGODB_URI", "").strip()
-    mongodb_db_name: str = os.getenv("MONGODB_DB_NAME", "program_editor").strip()
-    admin_session_timeout_minutes: int = _as_int("ADMIN_SESSION_TIMEOUT_MINUTES", 30)
-
-    default_super_admin_username: str = os.getenv("DEFAULT_SUPER_ADMIN_USERNAME", "mviis").strip()
-    default_super_admin_password: str = os.getenv("DEFAULT_SUPER_ADMIN_PASSWORD", "mviis").strip()
+    programs_dir: str = _resolve_programs_dir()
 
 
 settings = Settings()
+

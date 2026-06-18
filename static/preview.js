@@ -1,9 +1,7 @@
-const AUTH_TOKEN_KEY = 'admin_token';
-
 const state = {
   program: null,
   index: 0,
-  editorTree: null,
+  dirty: false,
 };
 
 const els = {
@@ -18,84 +16,62 @@ const els = {
   prevBtn: document.getElementById('prev-step-btn'),
   nextBtn: document.getElementById('next-step-btn'),
   refreshBtn: document.getElementById('refresh-preview-btn'),
-  loadOrgSelect: document.getElementById('preview-load-org-select'),
-  loadBranchSelect: document.getElementById('preview-load-branch-select'),
-  loadProjectSelect: document.getElementById('preview-load-project-select'),
-  loadLineSelect: document.getElementById('preview-load-line-select'),
-  loadStationSelect: document.getElementById('preview-load-station-select'),
+  saveChangesBtn: document.getElementById('save-changes-btn'),
   loadRecipeSelect: document.getElementById('preview-load-recipe-select'),
   loadPartBtn: document.getElementById('preview-load-part-btn'),
   loadPartStatus: document.getElementById('preview-load-part-status'),
+  reorderList: document.getElementById('reorder-list'),
+  reorderStatus: document.getElementById('reorder-status'),
+  toggleReorderBtn: document.getElementById('toggle-reorder-btn'),
+  reorderContent: document.getElementById('reorder-content'),
 };
 
 const HIDDEN_KEYS = new Set(['step_no']);
 
-function authHeaders(initialHeaders = {}) {
-  const headers = new Headers(initialHeaders);
-  const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
-  if (token && !headers.has('X-Admin-Token')) {
-    headers.set('X-Admin-Token', token);
-  }
-  return headers;
-}
-
-async function fetchJson(url, init = {}) {
-  const response = await fetch(url, {
-    ...init,
-    headers: authHeaders(init.headers || {}),
-    credentials: 'same-origin',
-  });
-  return response;
-}
-
-function setLoadPartStatus(message, type = '') {
+function setLoadPartStatus(msg, type = '') {
   if (!els.loadPartStatus) return;
-  els.loadPartStatus.textContent = message || '';
-  els.loadPartStatus.className = `recipe-status ${type}`.trim();
+  els.loadPartStatus.textContent = msg || '';
+  els.loadPartStatus.className = ('recipe-status ' + type).trim();
 }
 
-function sanitizePartFolder(value) {
-  const cleaned = String(value || '')
-    .trim()
-    .split('')
-    .map((ch) => (/^[a-zA-Z0-9_-]$/.test(ch) ? ch : '_'))
-    .join('')
-    .replace(/^[_\.]+|[_\.]+$/g, '');
-  return cleaned || 'program';
+function setReorderStatus(msg, type = '') {
+  if (!els.reorderStatus) return;
+  els.reorderStatus.textContent = msg || '';
+  els.reorderStatus.className = ('recipe-status ' + type).trim();
+}
+
+function markDirty() {
+  state.dirty = true;
+  if (els.saveChangesBtn) els.saveChangesBtn.disabled = false;
+}
+
+function clearDirty() {
+  state.dirty = false;
+  if (els.saveChangesBtn) els.saveChangesBtn.disabled = true;
 }
 
 function normalizeProgramPayload(payload) {
   const normalized = payload && payload.program ? payload.program : payload;
-  if (!normalized || typeof normalized !== 'object') {
-    return { partname: '', steps: [] };
-  }
-  if (!Array.isArray(normalized.steps)) {
-    normalized.steps = [];
-  }
+  if (!normalized || typeof normalized !== 'object') return { partname: '', steps: [] };
+  if (!Array.isArray(normalized.steps)) normalized.steps = [];
   return normalized;
 }
 
-function resolveStepImage(step) {
-  const src = String(step?.upload_image || '').trim();
-  if (!src) {
-    return '';
-  }
-  if (src.startsWith('data:image') || src.startsWith('http://') || src.startsWith('https://') || src.startsWith('/')) {
-    return src;
-  }
+function sanitizePartFolder(value) {
+  return String(value || '').trim()
+    .split('').map(ch => (/^[a-zA-Z0-9_-]$/.test(ch) ? ch : '_')).join('')
+    .replace(/^[_.]+|[_.]+$/g, '') || 'program';
+}
 
-  const normalized = src.replace(/\\/g, '/');
-  if (normalized.startsWith('programs/')) {
-    return `/${normalized}`;
-  }
-  if (/^[^/]+\/(imgs\/)?[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(normalized)) {
-    return `/programs/${normalized}`;
-  }
-  if (/^[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(normalized)) {
-    const partFolder = sanitizePartFolder(state.program?.partname);
-    return `/programs/${partFolder}/imgs/${normalized}`;
-  }
-  return `/${normalized.replace(/^\/+/, '')}`;
+function resolveStepImage(step) {
+  const src = String(step && step.upload_image || '').trim();
+  if (!src) return '';
+  if (src.startsWith('data:image') || src.startsWith('http://') || src.startsWith('https://') || src.startsWith('/')) return src;
+  const n = src.replace(/\\/g, '/');
+  if (n.startsWith('programs/')) return '/' + n;
+  if (/^[^/]+\/(imgs\/)?[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(n)) return '/programs/' + n;
+  if (/^[^/]+\.(jpg|jpeg|png|gif|webp)$/i.test(n)) return '/programs/' + sanitizePartFolder(state.program && state.program.partname) + '/imgs/' + n;
+  return '/' + n.replace(/^\/+/, '');
 }
 
 function modeLabel(step) {
@@ -105,16 +81,14 @@ function modeLabel(step) {
   return 'No mode selected';
 }
 
-function displayValue(value) {
-  if (typeof value === 'boolean') return value ? 'True' : 'False';
-  if (value === null || value === undefined || value === '') return 'NA';
-  return String(value);
+function displayValue(v) {
+  if (typeof v === 'boolean') return v ? 'True' : 'False';
+  if (v === null || v === undefined || v === '') return 'NA';
+  return String(v);
 }
 
 function formatFieldKey(key) {
-  return String(key || '')
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return String(key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function visibleEntries(step) {
@@ -124,7 +98,7 @@ function visibleEntries(step) {
 }
 
 function renderStep() {
-  const steps = state.program?.steps || [];
+  const steps = (state.program && state.program.steps) || [];
   if (!steps.length) {
     els.stepTitle.textContent = 'No steps';
     els.mode.textContent = '';
@@ -135,23 +109,17 @@ function renderStep() {
     els.spinner.value = '1';
     return;
   }
-
   const step = steps[state.index];
-  els.stepTitle.textContent = `Step ${step.step_no || state.index + 1}`;
+  els.stepTitle.textContent = 'Step ' + (step.step_no || state.index + 1);
   els.mode.textContent = modeLabel(step);
-  els.count.textContent = `${state.index + 1} / ${steps.length}`;
+  els.count.textContent = (state.index + 1) + ' / ' + steps.length;
   els.spinner.max = String(steps.length);
   els.spinner.value = String(state.index + 1);
 
   const resolvedImage = resolveStepImage(step);
   if (resolvedImage) {
-    els.image.onload = () => {
-      els.imageWrap.classList.remove('hidden');
-    };
-    els.image.onerror = () => {
-      els.image.removeAttribute('src');
-      els.imageWrap.classList.add('hidden');
-    };
+    els.image.onload = () => els.imageWrap.classList.remove('hidden');
+    els.image.onerror = () => { els.image.removeAttribute('src'); els.imageWrap.classList.add('hidden'); };
     els.image.src = resolvedImage;
   } else {
     els.image.removeAttribute('src');
@@ -162,7 +130,7 @@ function renderStep() {
   for (const entry of visibleEntries(step)) {
     const card = document.createElement('div');
     card.className = 'preview-field';
-    card.innerHTML = `<span class="k">${entry.key}</span><span class="v">${entry.value}</span>`;
+    card.innerHTML = '<span class="k">' + entry.key + '</span><span class="v">' + entry.value + '</span>';
     els.fields.appendChild(card);
   }
 
@@ -170,178 +138,158 @@ function renderStep() {
   els.nextBtn.disabled = state.index === steps.length - 1;
 }
 
-function goto(index) {
-  const steps = state.program?.steps || [];
-  if (!steps.length) return;
-  state.index = Math.max(0, Math.min(index, steps.length - 1));
+function renderReorderList() {
+  if (!els.reorderList) return;
+  const steps = (state.program && state.program.steps) || [];
+  els.reorderList.innerHTML = '';
+
+  steps.forEach((step, i) => {
+    const li = document.createElement('li');
+    li.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 4px;';
+    if (i === state.index) li.style.background = 'var(--color-accent-light, #eef3ff)';
+
+    const label = document.createElement('span');
+    label.style.cssText = 'flex:1;font-size:13px;cursor:pointer;';
+    label.textContent = 'Step ' + (step.step_no || i + 1) + ' — ' + modeLabel(step);
+    label.addEventListener('click', () => goto(i));
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'secondary';
+    upBtn.textContent = '▲';
+    upBtn.style.cssText = 'padding:2px 6px;font-size:11px;min-width:0;';
+    upBtn.disabled = i === 0;
+    upBtn.title = 'Move up';
+    upBtn.addEventListener('click', () => moveStep(i, i - 1));
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'secondary';
+    downBtn.textContent = '▼';
+    downBtn.style.cssText = 'padding:2px 6px;font-size:11px;min-width:0;';
+    downBtn.disabled = i === steps.length - 1;
+    downBtn.title = 'Move down';
+    downBtn.addEventListener('click', () => moveStep(i, i + 1));
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'danger';
+    delBtn.textContent = '🗑';
+    delBtn.style.cssText = 'padding:2px 6px;font-size:11px;min-width:0;';
+    delBtn.title = 'Delete step';
+    delBtn.addEventListener('click', () => deleteStepLocal(i));
+
+    li.append(label, upBtn, downBtn, delBtn);
+    els.reorderList.appendChild(li);
+  });
+}
+
+function moveStep(fromIdx, toIdx) {
+  const steps = (state.program && state.program.steps) || [];
+  if (toIdx < 0 || toIdx >= steps.length) return;
+  const moved = steps.splice(fromIdx, 1)[0];
+  steps.splice(toIdx, 0, moved);
+  renumberSteps(steps);
+  if (state.index === fromIdx) state.index = toIdx;
+  else if (fromIdx < toIdx && state.index > fromIdx && state.index <= toIdx) state.index--;
+  else if (fromIdx > toIdx && state.index >= toIdx && state.index < fromIdx) state.index++;
+  markDirty();
+  setReorderStatus('Reordered — click Save Changes to persist.', '');
+  renderReorderList();
   renderStep();
 }
 
-function flattenEditorTree() {
-  const tree = state.editorTree;
-  const organizations = tree?.organizations || [];
-  const branches = [];
-  const projects = [];
-  const lines = [];
-  const stations = [];
-
-  for (const org of organizations) {
-    for (const branch of org.branches || []) {
-      branches.push(branch);
-      for (const project of branch.projects || []) {
-        projects.push(project);
-        for (const line of project.lines || []) {
-          lines.push(line);
-          for (const station of line.stations || []) {
-            stations.push(station);
-          }
-        }
-      }
-    }
-  }
-
-  return { organizations, branches, projects, lines, stations };
+function deleteStepLocal(idx) {
+  const steps = (state.program && state.program.steps) || [];
+  if (steps.length <= 1) { setReorderStatus('Cannot delete the last step.', 'error'); return; }
+  if (!confirm('Delete Step ' + (steps[idx].step_no || idx + 1) + '?')) return;
+  steps.splice(idx, 1);
+  renumberSteps(steps);
+  if (state.index >= steps.length) state.index = steps.length - 1;
+  markDirty();
+  setReorderStatus('Step deleted — click Save Changes to persist.', '');
+  renderReorderList();
+  renderStep();
 }
 
-function resetSelect(selectElement, placeholderLabel) {
-  if (!selectElement) return;
-  selectElement.innerHTML = `<option value="">-- ${placeholderLabel} --</option>`;
-}
-
-function populateOrgSelect() {
-  const { organizations } = flattenEditorTree();
-  const orgsHtml = '<option value="">-- Organization --</option>' +
-    organizations.map((o) => `<option value="${o.organization_id}">${o.name}</option>`).join('');
-  if (els.loadOrgSelect) {
-    els.loadOrgSelect.innerHTML = orgsHtml;
-  }
-}
-
-function refreshLoadRecipeSelect() {
-  if (!els.loadRecipeSelect) return;
-
-  const orgId = els.loadOrgSelect?.value || '';
-  const branchId = els.loadBranchSelect?.value || '';
-  const projectId = els.loadProjectSelect?.value || '';
-  const lineId = els.loadLineSelect?.value || '';
-  const stationId = els.loadStationSelect?.value || '';
-
-  const recipes = (state.editorTree?.recipes || []).filter((recipe) => {
-    if (orgId && recipe.organization_id !== orgId) return false;
-    if (branchId && recipe.branch_id && recipe.branch_id !== branchId) return false;
-    if (projectId && recipe.project_id && recipe.project_id !== projectId) return false;
-    if (lineId && recipe.line_id && recipe.line_id !== lineId) return false;
-    if (stationId && recipe.station_id && recipe.station_id !== stationId) return false;
-    return true;
+function renumberSteps(steps) {
+  steps.forEach((s, i) => {
+    s.step_no = i + 1;
+    s.bc_parent = (i === 0);
+    s.bc_child = (i !== 0);
   });
-
-  els.loadRecipeSelect.innerHTML = '<option value="">-- Select Part --</option>' +
-    recipes.map((recipe) => `<option value="${recipe.recipe_id}">${recipe.name || 'Unnamed'}</option>`).join('');
 }
 
-function attachLoadCascading() {
-  if (els.loadOrgSelect) {
-    els.loadOrgSelect.addEventListener('change', () => {
-      const { branches } = flattenEditorTree();
-      const filtered = branches.filter((branch) => branch.organization_id === els.loadOrgSelect.value);
-      if (els.loadBranchSelect) {
-        els.loadBranchSelect.innerHTML = '<option value="">-- Branch --</option>' +
-          filtered.map((branch) => `<option value="${branch.branch_id}">${branch.name}</option>`).join('');
-      }
-      resetSelect(els.loadProjectSelect, 'Project');
-      resetSelect(els.loadLineSelect, 'Line');
-      resetSelect(els.loadStationSelect, 'Station');
-      refreshLoadRecipeSelect();
-    });
-  }
-
-  if (els.loadBranchSelect) {
-    els.loadBranchSelect.addEventListener('change', () => {
-      const { projects } = flattenEditorTree();
-      const filtered = projects.filter((project) => project.branch_id === els.loadBranchSelect.value);
-      if (els.loadProjectSelect) {
-        els.loadProjectSelect.innerHTML = '<option value="">-- Project --</option>' +
-          filtered.map((project) => `<option value="${project.project_id}">${project.name}</option>`).join('');
-      }
-      resetSelect(els.loadLineSelect, 'Line');
-      resetSelect(els.loadStationSelect, 'Station');
-      refreshLoadRecipeSelect();
-    });
-  }
-
-  if (els.loadProjectSelect) {
-    els.loadProjectSelect.addEventListener('change', () => {
-      const { lines } = flattenEditorTree();
-      const filtered = lines.filter((line) => line.project_id === els.loadProjectSelect.value);
-      if (els.loadLineSelect) {
-        els.loadLineSelect.innerHTML = '<option value="">-- Line --</option>' +
-          filtered.map((line) => `<option value="${line.line_id}">${line.name}</option>`).join('');
-      }
-      resetSelect(els.loadStationSelect, 'Station');
-      refreshLoadRecipeSelect();
-    });
-  }
-
-  if (els.loadLineSelect) {
-    els.loadLineSelect.addEventListener('change', () => {
-      const { stations } = flattenEditorTree();
-      const filtered = stations.filter((station) => station.line_id === els.loadLineSelect.value);
-      if (els.loadStationSelect) {
-        els.loadStationSelect.innerHTML = '<option value="">-- Station --</option>' +
-          filtered.map((station) => `<option value="${station.station_id}">${station.name}</option>`).join('');
-      }
-      refreshLoadRecipeSelect();
-    });
-  }
-
-  if (els.loadStationSelect) {
-    els.loadStationSelect.addEventListener('change', refreshLoadRecipeSelect);
-  }
-}
-
-async function loadEditorTree() {
+async function saveChanges() {
+  if (!state.program) return;
   try {
-    const response = await fetchJson('/api/admin/tree');
-    if (!response.ok) {
-      return;
-    }
-    state.editorTree = await response.json();
-    populateOrgSelect();
-    refreshLoadRecipeSelect();
-  } catch (_error) {
+    if (els.saveChangesBtn) { els.saveChangesBtn.disabled = true; els.saveChangesBtn.textContent = 'Saving...'; }
+    const resp = await fetch('/api/program', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state.program),
+    });
+    if (!resp.ok) { setReorderStatus('Save failed: ' + await resp.text(), 'error'); return; }
+    const payload = await resp.json();
+    state.program = normalizeProgramPayload(payload);
+    clearDirty();
+    setReorderStatus('Saved successfully.', 'ok');
+    renderReorderList();
+    renderStep();
+  } catch (err) {
+    setReorderStatus('Save error: ' + err, 'error');
+  } finally {
+    if (els.saveChangesBtn) els.saveChangesBtn.textContent = 'Save Changes';
   }
 }
 
-async function loadPartFromRecipe() {
-  if (!els.loadRecipeSelect?.value) {
-    setLoadPartStatus('Select a part / recipe first.', 'error');
-    return;
-  }
-
-  const recipe = (state.editorTree?.recipes || []).find((entry) => entry.recipe_id === els.loadRecipeSelect.value);
-  if (!recipe?.payload) {
-    setLoadPartStatus('Recipe has no preview data.', 'error');
-    return;
-  }
-
-  state.program = normalizeProgramPayload(recipe.payload);
-  if (!Array.isArray(state.program.steps) || !state.program.steps.length) {
-    state.program.steps = [];
-  }
-
-  els.partname.textContent = state.program.partname || recipe.name || 'Program';
-  goto(0);
-  setLoadPartStatus(`Loaded: ${recipe.name || 'Part'}`, 'ok');
+function goto(index) {
+  const steps = (state.program && state.program.steps) || [];
+  if (!steps.length) return;
+  state.index = Math.max(0, Math.min(index, steps.length - 1));
+  renderStep();
+  renderReorderList();
 }
 
-async function loadProgram() {
-  const response = await fetchJson('/api/program');
-  if (!response.ok) {
-    throw new Error('Failed to load current program');
+async function refreshProgramSelect() {
+  if (!els.loadRecipeSelect) return;
+  try {
+    const resp = await fetch('/api/programs');
+    if (!resp.ok) return;
+    const payload = await resp.json();
+    const programs = Array.isArray(payload.programs) ? payload.programs : [];
+    els.loadRecipeSelect.innerHTML = '<option value="">-- Select Program --</option>' +
+      programs.map(name => '<option value="' + name + '">' + name.replace(/\.json$/i, '') + '</option>').join('');
+  } catch (_) {}
+}
+
+async function loadPartFromSelect() {
+  const programFile = els.loadRecipeSelect && els.loadRecipeSelect.value;
+  if (!programFile) { setLoadPartStatus('Select a program first.', 'error'); return; }
+  if (state.dirty && !confirm('You have unsaved changes. Discard and load?')) return;
+  try {
+    setLoadPartStatus('Loading...', '');
+    const resp = await fetch('/api/programs/' + encodeURIComponent(programFile), { method: 'POST' });
+    if (!resp.ok) { setLoadPartStatus('Failed: ' + await resp.text(), 'error'); return; }
+    const payload = await resp.json();
+    state.program = normalizeProgramPayload(payload);
+    els.partname.textContent = state.program.partname || programFile;
+    clearDirty();
+    setReorderStatus('', '');
+    goto(0);
+    setLoadPartStatus('Loaded: ' + programFile.replace(/\.json$/i, ''), 'ok');
+  } catch (err) {
+    setLoadPartStatus('Error: ' + err, 'error');
   }
-  const payload = await response.json();
+}
+
+async function loadCurrentProgram() {
+  const resp = await fetch('/api/program');
+  if (!resp.ok) throw new Error('Failed to load current program');
+  const payload = await resp.json();
   state.program = normalizeProgramPayload(payload);
-  els.partname.textContent = state.program.partname || 'Program';
+  els.partname.textContent = (state.program && state.program.partname) || 'Program';
+  clearDirty();
   goto(0);
 }
 
@@ -352,24 +300,36 @@ function bindEvents() {
 
   if (els.refreshBtn) {
     els.refreshBtn.addEventListener('click', async () => {
+      if (state.dirty && !confirm('Discard unsaved changes?')) return;
       const current = state.index;
-      await loadProgram();
+      await loadCurrentProgram();
       goto(current);
     });
   }
 
-  if (els.loadPartBtn) {
-    els.loadPartBtn.addEventListener('click', loadPartFromRecipe);
+  if (els.saveChangesBtn) {
+    els.saveChangesBtn.addEventListener('click', saveChanges);
   }
 
-  attachLoadCascading();
+  if (els.loadPartBtn) {
+    els.loadPartBtn.addEventListener('click', loadPartFromSelect);
+  }
+
+  if (els.toggleReorderBtn && els.reorderContent) {
+    els.toggleReorderBtn.addEventListener('click', () => {
+      const collapsed = els.reorderContent.hidden;
+      els.reorderContent.hidden = !collapsed;
+      els.toggleReorderBtn.textContent = collapsed ? 'Collapse' : 'Expand';
+      els.toggleReorderBtn.setAttribute('aria-expanded', String(collapsed));
+    });
+  }
 }
 
 (async function init() {
   bindEvents();
+  await refreshProgramSelect();
   try {
-    await loadProgram();
-    await loadEditorTree();
+    await loadCurrentProgram();
   } catch (err) {
     els.stepTitle.textContent = 'Unable to load preview';
     els.mode.textContent = String(err);

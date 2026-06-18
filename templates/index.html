@@ -20,7 +20,6 @@
     </div>
     <ul class="app-nav-links">
       <li><a class="app-nav-link is-active" href="/" id="nav-editor">Editor</a></li>
-      <li><a class="app-nav-link" href="/admin" id="nav-admin">Admin Console</a></li>
       <li><a class="app-nav-link" href="/preview" id="nav-preview">Preview</a></li>
     </ul>
     <div class="app-nav-toolbar">
@@ -29,10 +28,6 @@
       <button id="download-pdf-btn" class="secondary" hidden style="display:none;">↓ PDF</button>
       <button id="download-wi-btn" class="secondary" style="display:none;" hidden>↓ WI</button>
       <button id="save-program-btn" class="primary">Save Program</button>
-    </div>
-    <div class="app-nav-user">
-      <span id="session-info" class="nav-user-label">Loading...</span>
-      <button id="logout-btn" class="secondary" type="button">Sign out</button>
     </div>
   </nav>
 
@@ -53,6 +48,7 @@
 
         <!-- New Part pane -->
         <div id="new-part-pane" class="part-tab-pane is-active">
+          <button id="new-part-btn" class="secondary full" type="button">+ New Empty Part</button>
           <label>Part Name
             <input id="partname" type="text" placeholder="Enter part name…" />
           </label>
@@ -67,56 +63,11 @@
 
         <!-- Load Part pane -->
         <div id="load-part-pane" class="part-tab-pane">
-          <label>Organization
-            <select id="load-org-select"><option value="">-- Organization --</option></select>
-          </label>
-          <label>Branch
-            <select id="load-branch-select"><option value="">-- Branch --</option></select>
-          </label>
-          <label>Project
-            <select id="load-project-select"><option value="">-- Project --</option></select>
-          </label>
-          <label>Line
-            <select id="load-line-select"><option value="">-- Line --</option></select>
-          </label>
-          <label>Station
-            <select id="load-station-select"><option value="">-- Station --</option></select>
-          </label>
-          <label>Part / Recipe
-            <select id="load-recipe-select"><option value="">-- Select Part --</option></select>
+          <label>Part / Program
+            <select id="load-recipe-select"><option value="">-- Select Program --</option></select>
           </label>
           <button id="load-part-btn" class="secondary full">Load Part</button>
           <p id="load-part-status" class="recipe-status"></p>
-        </div>
-
-        <!-- Map to Device -->
-        <div class="part-map-section">
-          <div class="sidebar-section-head sidebar-section-head-sub">
-            <h3 class="sidebar-title">Map to Device</h3>
-            <button id="toggle-map-device-btn" type="button" class="secondary sidebar-toggle-btn" aria-expanded="true">Collapse</button>
-          </div>
-          <div id="map-device-content" class="sidebar-collapsible-content">
-          <label>Organization
-            <select id="map-org-select"><option value="">-- Organization --</option></select>
-          </label>
-          <label>Branch
-            <select id="map-branch-select"><option value="">-- Branch --</option></select>
-          </label>
-          <label>Project
-            <select id="map-project-select"><option value="">-- Project --</option></select>
-          </label>
-          <label>Line
-            <select id="map-line-select"><option value="">-- Line --</option></select>
-          </label>
-          <label>Station
-            <select id="map-station-select"><option value="">-- Station --</option></select>
-          </label>
-          <label>Device
-            <select id="map-device-select"><option value="">-- select station first --</option></select>
-          </label>
-          <button id="map-device-btn" class="secondary full">Map Recipe → Device</button>
-          <p id="map-status" class="recipe-status"></p>
-          </div>
         </div>
         </div>
       </section>

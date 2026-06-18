@@ -1,23 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import copy
-import mimetypes
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
 import io
-import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from google.api_core.exceptions import NotFound
-from google.cloud import storage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
@@ -25,40 +20,15 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 from config import settings
-from repository.mongo_repository import AdminRepository
-from schemas.admin_schemas import (
-    BranchCreate,
-    DeviceCreate,
-    DeviceUpdate,
-    LineCreate,
-    LoginRequest,
-    NameCodeUpdate,
-    OrganizationCreate,
-    ProjectCreate,
-    RecipeCreate,
-    RecipeDeviceMap,
-    StationCreate,
-    StorageContextSet,
-    UserCreate,
-    UserUpdate,
-)
-from services.admin_service import AdminService
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "template.json"
 STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = BASE_DIR / "templates" / "index.html"
 PREVIEW_FILE = BASE_DIR / "templates" / "preview.html"
-ADMIN_FILE = BASE_DIR / "templates" / "admin.html"
-PROGRAMS_DIR = BASE_DIR / "programs"
+PROGRAMS_DIR = Path(settings.programs_dir)
 
-GCS_BUCKET_NAME = settings.gcs_bucket_name
-GCS_PREFIX = settings.gcs_prefix
-GCS_DIRECT_UPLOAD_THRESHOLD_BYTES = max(
-    1_000_000,
-    settings.gcs_direct_upload_threshold_bytes,
-)
-GCS_KEY_FILE = settings.gcs_key_file
+DIRECT_UPLOAD_THRESHOLD_BYTES = 20 * 1024 * 1024
 
 app = FastAPI(title=settings.app_name)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -66,13 +36,6 @@ PROGRAMS_DIR.mkdir(parents=True, exist_ok=True)
 
 STATE_LOCK = threading.Lock()
 CURRENT_DATA: Dict[str, Any] = {}
-CURRENT_STORAGE_CONTEXT: Dict[str, str] = {}
-GCS_CLIENT: Optional[storage.Client] = None
-
-admin_repository = AdminRepository(settings.mongodb_uri, settings.mongodb_db_name)
-admin_service = AdminService(admin_repository, settings.admin_session_timeout_minutes)
-
-ADMIN_TOKEN_COOKIE = "admin_token"
 
 STEP_TEMPLATE: Dict[str, Any] = {
     "upload_image": "",
@@ -84,7 +47,10 @@ STEP_TEMPLATE: Dict[str, Any] = {
     "check_short_workstation": "",
     "check_part_number": "",
     "check_ref_designator": "",
-    "enable_barcode_mes": False,
+    "enable_barcode_mes_t": False,
+    "enable_barcode_mes_nt": False,
+    "restart_on_failure": False,
+    "reg_ex_validator": "",
     "ack_title": "",
     "request_ack": False,
     "enable_ack_mes": False,
@@ -112,7 +78,6 @@ STEP_TEMPLATE: Dict[str, Any] = {
     "torque_compensation": "",
 }
 
-
 DEFAULT_DATA: Dict[str, Any] = {
     "partname": "IBE333333_A",
     "enable_mes": False,
@@ -127,7 +92,10 @@ DEFAULT_DATA: Dict[str, Any] = {
             "check_short_workstation": "PRNM",
             "check_part_number": "IBE333333",
             "check_ref_designator": "NA",
-            "enable_barcode_mes": True,
+            "enable_barcode_mes_t": True,
+            "enable_barcode_mes_nt": False,
+            "restart_on_failure": False,
+            "reg_ex_validator": "",
             "ack_title": "",
             "request_ack": False,
             "enable_ack_mes": False,
@@ -157,85 +125,7 @@ DEFAULT_DATA: Dict[str, Any] = {
     ],
 }
 
-
-def _resolve_gcs_key_file() -> Optional[Path]:
-    candidates: List[Path] = []
-    if GCS_KEY_FILE:
-        candidates.append(Path(GCS_KEY_FILE))
-    candidates.extend(
-        [
-            BASE_DIR / "bucket_key.json",
-            BASE_DIR / "key.json",
-            BASE_DIR / "service-account.json",
-        ]
-    )
-    for candidate in candidates:
-        resolved = candidate if candidate.is_absolute() else (BASE_DIR / candidate)
-        if resolved.exists() and resolved.is_file():
-            return resolved
-    return None
-
-
-def get_gcs_client() -> Optional[storage.Client]:
-    global GCS_CLIENT
-    if not GCS_BUCKET_NAME:
-        return None
-    if GCS_CLIENT is not None:
-        return GCS_CLIENT
-
-    key_file = _resolve_gcs_key_file()
-    try:
-        if key_file is not None:
-            GCS_CLIENT = storage.Client.from_service_account_json(str(key_file))
-        else:
-            GCS_CLIENT = storage.Client()
-    except Exception:
-        return None
-    return GCS_CLIENT
-
-
-def get_gcs_bucket() -> Optional[storage.Bucket]:
-    client = get_gcs_client()
-    if client is None:
-        return None
-    return client.bucket(GCS_BUCKET_NAME)
-
-
-def gcs_enabled() -> bool:
-    return get_gcs_bucket() is not None
-
-
-if not GCS_BUCKET_NAME:
-    app.mount("/programs", StaticFiles(directory=PROGRAMS_DIR), name="programs")
-
-
-def gcs_blob_name(relative_path: str) -> str:
-    rel = str(relative_path).strip("/ ")
-    if not rel:
-        raise ValueError("GCS blob path cannot be empty")
-    return f"{GCS_PREFIX}/{rel}" if GCS_PREFIX else rel
-
-
-def upload_bytes_to_gcs(relative_path: str, payload: bytes, content_type: str) -> None:
-    bucket = get_gcs_bucket()
-    if bucket is None:
-        return
-    blob = bucket.blob(gcs_blob_name(relative_path))
-    blob.upload_from_string(payload, content_type=content_type)
-
-
-def read_program_asset_bytes(relative_path: str) -> Optional[bytes]:
-    rel = str(relative_path).strip("/ ")
-    if not rel:
-        return None
-
-    if gcs_enabled():
-        return download_bytes_from_gcs(rel)
-
-    local_path = (BASE_DIR / rel).resolve()
-    if local_path.exists() and local_path.is_file() and str(local_path).startswith(str(BASE_DIR.resolve())):
-        return local_path.read_bytes()
-    return None
+app.mount("/programs", StaticFiles(directory=PROGRAMS_DIR), name="programs")
 
 
 def _list_local_program_names() -> List[str]:
@@ -247,44 +137,6 @@ def _list_local_program_names() -> List[str]:
             continue
         names.append(rel)
     return sorted(set(names))
-
-
-def scan_program_names_from_gcs() -> List[str]:
-    bucket = get_gcs_bucket()
-    if bucket is None:
-        return []
-
-    # Programs live under program_editor/programs/<part>/imgs/ — scan for part names.
-    programs_prefix = f"{GCS_PREFIX.rstrip('/')}/programs/" if GCS_PREFIX else "programs/"
-    names: set[str] = set()
-    for blob in bucket.list_blobs(prefix=programs_prefix):
-        tail = blob.name[len(programs_prefix):]
-        part_name = tail.split("/")[0]
-        if part_name:
-            names.add(part_name)
-    return sorted(names)
-
-
-def download_bytes_from_gcs(relative_path: str) -> Optional[bytes]:
-    bucket = get_gcs_bucket()
-    if bucket is None:
-        return None
-    blob = bucket.blob(gcs_blob_name(relative_path))
-    if not blob.exists():
-        return None
-    return blob.download_as_bytes()
-
-
-def list_programs_from_gcs() -> List[str]:
-    return scan_program_names_from_gcs()
-
-
-def program_storage_path(program: Dict[str, Any]) -> str:
-    # JSON is stored in the database. This path indicates where images are kept.
-    part = sanitize_filename(program.get("partname", "program"), fallback="program")
-    if gcs_enabled():
-        return f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name(f'programs/{part}/')}"
-    return str((PROGRAMS_DIR / part).resolve())
 
 
 def _load_default_data() -> Dict[str, Any]:
@@ -303,7 +155,6 @@ def normalize_program(program: Dict[str, Any]) -> Dict[str, Any]:
     data.setdefault("partname", "")
     data.setdefault("enable_mes", False)
     data.setdefault("enable_ftp", False)
-    data.setdefault("storage_context", copy.deepcopy(CURRENT_STORAGE_CONTEXT))
     data.setdefault("steps", [])
     data["steps"] = [normalize_step(step, i + 1) for i, step in enumerate(data["steps"])]
     renumber_steps(data["steps"])
@@ -321,7 +172,6 @@ def normalize_step(step: Dict[str, Any], step_no: int) -> Dict[str, Any]:
         elif isinstance(STEP_TEMPLATE.get(key), str):
             normalized[key] = "" if value is None else str(value)
 
-    # Keep the three mode flags mutually exclusive.
     if normalized["enable_barcode"]:
         normalized["request_ack"] = False
         normalized["enable_fastening"] = False
@@ -332,7 +182,6 @@ def normalize_step(step: Dict[str, Any], step_no: int) -> Dict[str, Any]:
         normalized["enable_barcode"] = False
         normalized["request_ack"] = False
 
-    # Validation rule: step 1 is BC Parent, all following steps are BC Child.
     if normalized["step_no"] == 1:
         normalized["bc_parent"] = True
         normalized["bc_child"] = False
@@ -340,7 +189,6 @@ def normalize_step(step: Dict[str, Any], step_no: int) -> Dict[str, Any]:
         normalized["bc_parent"] = False
         normalized["bc_child"] = True
 
-    # Set remarks based on mode
     if normalized["enable_barcode"]:
         normalized["remarks"] = normalized.get("bc_title", "")
     elif normalized["request_ack"]:
@@ -357,83 +205,6 @@ def sanitize_filename(value: str, fallback: str = "program") -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in (value or "").strip())
     cleaned = cleaned.strip("._")
     return cleaned or fallback
-
-
-def sanitize_path_segment(value: str, fallback: str = "na") -> str:
-    return sanitize_filename(value, fallback=fallback).lower()
-
-
-def build_storage_context_prefix(program: Dict[str, Any]) -> str:
-    context = program.get("storage_context") if isinstance(program, dict) else {}
-    if not isinstance(context, dict):
-        return ""
-
-    required_keys = [
-        "organization_code",
-        "branch_code",
-        "project_code",
-        "line_code",
-        "station_code",
-    ]
-    if not all(context.get(key) for key in required_keys):
-        return ""
-
-    parts = [
-        "orgs",
-        sanitize_path_segment(context["organization_code"], "org"),
-        sanitize_path_segment(context["branch_code"], "branch"),
-        sanitize_path_segment(context["project_code"], "project"),
-        sanitize_path_segment(context["line_code"], "line"),
-        sanitize_path_segment(context["station_code"], "station"),
-        "programs",
-    ]
-    return "/".join(parts)
-
-
-def resolve_program_base_prefix(program: Dict[str, Any]) -> str:
-    scoped = build_storage_context_prefix(program)
-    return scoped.strip("/") if scoped else ""
-
-
-def resolve_admin_token(request: Request, x_admin_token: Optional[str] = None) -> str:
-    header_token = (x_admin_token or "").strip()
-    if header_token:
-        return header_token
-    return str(request.cookies.get(ADMIN_TOKEN_COOKIE, "")).strip()
-
-
-def get_current_admin_user(request: Request, x_admin_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-    token = resolve_admin_token(request, x_admin_token)
-    return admin_service.require_user(token)
-
-
-def require_authenticated_request(request: Request) -> Dict[str, Any]:
-    token = resolve_admin_token(request)
-    return admin_service.require_user(token)
-
-
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    path = request.url.path
-    if path.startswith("/static") or path.startswith("/programs"):
-        return await call_next(request)
-
-    allow_unauthenticated_paths = {
-        "/admin",
-        "/api/admin/bootstrap-state",
-        "/api/admin/bootstrap",
-        "/api/admin/login",
-    }
-    if path in allow_unauthenticated_paths:
-        return await call_next(request)
-
-    if path.startswith("/api/") or path.startswith("/download"):
-        try:
-            require_authenticated_request(request)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-
-    return await call_next(request)
 
 
 def decode_image_data_url(data_url: str) -> Optional[bytes]:
@@ -457,23 +228,14 @@ def resolve_step_image_bytes(program: Dict[str, Any], step: Dict[str, Any]) -> O
 
     parsed = urlparse(image_value)
     image_path = parsed.path if parsed.path else image_value
-    if image_path.startswith("/"):
-        source_path = BASE_DIR / image_path.lstrip("/")
-    else:
-        source_path = BASE_DIR / image_path
 
-    if source_path.exists() and source_path.is_file():
-        return source_path.read_bytes()
-
-    gcs_candidate = image_path.lstrip("/")
-    gcs_bytes = download_bytes_from_gcs(gcs_candidate)
-    if gcs_bytes is not None:
-        return gcs_bytes
+    if image_path.startswith("/programs/"):
+        source_path = PROGRAMS_DIR / image_path[len("/programs/"):]
+        if source_path.exists() and source_path.is_file():
+            return source_path.read_bytes()
 
     part = sanitize_filename(program.get("partname", "program"))
-    base_prefix = resolve_program_base_prefix(program)
-    image_rel_root = f"{base_prefix}/{part}" if base_prefix else part
-    fallback_path = PROGRAMS_DIR / image_rel_root / "imgs" / Path(image_path).name
+    fallback_path = PROGRAMS_DIR / part / "imgs" / Path(image_path).name
     if fallback_path.exists() and fallback_path.is_file():
         return fallback_path.read_bytes()
     return None
@@ -541,8 +303,8 @@ def mode_pdf_style(mode: str) -> Dict[str, str]:
     )
 
 
-def visible_step_entries(step: Dict[str, Any], include_checkbox_fields: bool = True) -> List[tuple[str, str]]:
-    entries: List[tuple[str, str]] = []
+def visible_step_entries(step: Dict[str, Any], include_checkbox_fields: bool = True) -> List[tuple]:
+    entries = []
     for key, value in step.items():
         if key in {"upload_image", "step_no"}:
             continue
@@ -612,7 +374,6 @@ def draw_step_pdf_block(
     pdf.setFillColor(colors.HexColor(style["step_fill"]))
     pdf.roundRect(x, y, width, height, 10, stroke=1, fill=1)
 
-    # Top accent panel gives each mode a distinct visual identity.
     header_h = 38
     pdf.setFillColor(colors.HexColor(style["header_fill"]))
     pdf.roundRect(x + 1, y + height - header_h - 1, width - 2, header_h, 8, stroke=0, fill=1)
@@ -629,7 +390,6 @@ def draw_step_pdf_block(
     text_y_top = y + height - 26
     text_w = image_area_x - gutter - text_x
 
-    # Keep a unified step background and only subtle structural separators.
     pdf.setStrokeColor(colors.HexColor(style["card_border"]))
     pdf.setLineWidth(0.8)
     pdf.roundRect(image_x - 3, image_y - 3, image_w + 6, image_h + 6, 6, stroke=1, fill=0)
@@ -772,43 +532,8 @@ def build_steps_pdf(program: Dict[str, Any], include_checkbox_fields: bool = Tru
 
 def persist_program_locked() -> None:
     part = sanitize_filename(CURRENT_DATA.get("partname", "program"))
-    # Flat layout: images at programs/<part>/imgs/, JSON stored in DB only (not GCS).
-    json_rel = f"{part}.json"
-    image_rel_root = part
-    if gcs_enabled():
-        # Keep step saves responsive in Cloud Run by avoiding bucket-wide scans.
-        active_program = copy.deepcopy(CURRENT_DATA)
-
-        for step in active_program.get("steps", []):
-            step_no = int(step.get("step_no", 0) or 0)
-            if step_no <= 0:
-                continue
-
-            image_value = step.get("upload_image", "")
-            if not isinstance(image_value, str) or not image_value:
-                step["upload_image"] = ""
-                continue
-
-            decoded = decode_image_data_url(image_value)
-            if decoded is not None:
-                image_name = f"{step_no}.png"
-                # Flat GCS layout: program_editor/programs/<part>/imgs/<step>.png
-                upload_bytes_to_gcs(
-                    f"programs/{part}/imgs/{image_name}",
-                    decoded,
-                    "image/png",
-                )
-                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
-
-        # JSON is stored in the database via upsert_program_recipe — not uploaded to GCS.
-        CURRENT_DATA.clear()
-        CURRENT_DATA.update(active_program)
-        return
-
-    json_path = PROGRAMS_DIR / json_rel
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    image_root = PROGRAMS_DIR / image_rel_root
-    image_dir = image_root / "imgs"
+    json_path = PROGRAMS_DIR / f"{part}.json"
+    image_dir = PROGRAMS_DIR / part / "imgs"
     image_dir.mkdir(parents=True, exist_ok=True)
 
     active_image_names = set()
@@ -823,18 +548,19 @@ def persist_program_locked() -> None:
         decoded = decode_image_data_url(image_value) if isinstance(image_value, str) else None
         if decoded is not None:
             image_path.write_bytes(decoded)
-            step["upload_image"] = f"/programs/{image_rel_root}/imgs/{image_name}"
+            step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
             active_image_names.add(image_name)
             continue
 
         if isinstance(image_value, str) and image_value.startswith("/programs/"):
-            source_path = BASE_DIR / image_value.lstrip("/")
+            source_rel = image_value[len("/programs/"):]
+            source_path = PROGRAMS_DIR / source_rel
             if source_path.exists():
                 image_path.write_bytes(source_path.read_bytes())
-                step["upload_image"] = f"/programs/{image_rel_root}/imgs/{image_name}"
+                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
                 active_image_names.add(image_name)
             elif image_path.exists():
-                step["upload_image"] = f"/programs/{image_rel_root}/imgs/{image_name}"
+                step["upload_image"] = f"/programs/{part}/imgs/{image_name}"
                 active_image_names.add(image_name)
             else:
                 step["upload_image"] = ""
@@ -843,33 +569,11 @@ def persist_program_locked() -> None:
         if not image_value:
             if image_path.exists():
                 image_path.unlink()
-            legacy_png = image_root / f"{step_no}.png"
-            legacy_jpg = image_dir / f"{step_no}.jpg"
-            legacy_jpeg = image_dir / f"{step_no}.jpeg"
-            legacy_root_jpg = image_root / f"{step_no}.jpg"
-            legacy_root_jpeg = image_root / f"{step_no}.jpeg"
-            if legacy_png.exists():
-                legacy_png.unlink()
-            if legacy_jpg.exists():
-                legacy_jpg.unlink()
-            if legacy_jpeg.exists():
-                legacy_jpeg.unlink()
-            if legacy_root_jpg.exists():
-                legacy_root_jpg.unlink()
-            if legacy_root_jpeg.exists():
-                legacy_root_jpeg.unlink()
             step["upload_image"] = ""
 
     for pattern in ("*.png", "*.jpg", "*.jpeg"):
         for existing in image_dir.glob(pattern):
             if existing.name not in active_image_names:
-                existing.unlink()
-
-    # Remove legacy images that used to live directly under /programs/<part>/.
-    for pattern in ("*.png", "*.jpg", "*.jpeg"):
-        for existing in image_root.glob(pattern):
-            step_num = existing.stem
-            if step_num.isdigit() and f"{step_num}.png" not in active_image_names:
                 existing.unlink()
 
     json_path.write_text(json.dumps(CURRENT_DATA, indent=4), encoding="utf-8")
@@ -908,7 +612,7 @@ def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
     for info in archive.infolist():
         if info.is_dir():
             continue
-        rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
+        rel = str(Path(info.filename)).replace("\\\\", "/").lstrip("/")
         if not rel or ".." in Path(rel).parts:
             continue
         if not rel.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -927,45 +631,10 @@ def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
             if rel:
                 step["upload_image"] = f"/programs/{rel}"
 
-    if gcs_enabled():
-        bucket = get_gcs_bucket()
-        if bucket is not None:
-            # Only upload images using the flat layout; JSON goes to the database.
-            part = sanitize_filename(program.get("partname", "program"), fallback="program")
-            img_entries: List[tuple[str, bytes]] = []
-            for info in archive.infolist():
-                if info.is_dir():
-                    continue
-                rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
-                if not rel or ".." in Path(rel).parts:
-                    continue
-                fname = Path(rel).name
-                if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
-                    continue
-                # Flat GCS layout: program_editor/programs/<part>/imgs/<filename>
-                gcs_rel = f"programs/{part}/imgs/{fname}"
-                img_entries.append((gcs_rel, archive.read(info)))
-
-            if img_entries:
-                max_workers = min(12, max(4, len(img_entries)))
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = [
-                        executor.submit(
-                            bucket.blob(gcs_blob_name(gcs_rel)).upload_from_string,
-                            img_data,
-                            content_type="image/png",
-                        )
-                        for gcs_rel, img_data in img_entries
-                    ]
-                    for future in as_completed(futures):
-                        future.result()
-        return program
-
-    # Local mode: preserve the same ZIP directory structure under /programs.
     for info in archive.infolist():
         if info.is_dir():
             continue
-        rel = str(Path(info.filename)).replace("\\", "/").lstrip("/")
+        rel = str(Path(info.filename)).replace("\\\\", "/").lstrip("/")
         if not rel or ".." in Path(rel).parts:
             continue
         target = (PROGRAMS_DIR / rel).resolve()
@@ -984,9 +653,6 @@ def get_state() -> Dict[str, Any]:
 def set_state(data: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
     normalized = normalize_program(data)
     with STATE_LOCK:
-        CURRENT_STORAGE_CONTEXT.clear()
-        if isinstance(normalized.get("storage_context"), dict):
-            CURRENT_STORAGE_CONTEXT.update(normalized.get("storage_context", {}))
         CURRENT_DATA.clear()
         CURRENT_DATA.update(normalized)
         if persist:
@@ -1034,28 +700,10 @@ def startup() -> None:
     global CURRENT_DATA
     with STATE_LOCK:
         CURRENT_DATA = _load_default_data()
-        CURRENT_STORAGE_CONTEXT.clear()
-        if isinstance(CURRENT_DATA.get("storage_context"), dict):
-            CURRENT_STORAGE_CONTEXT.update(CURRENT_DATA.get("storage_context", {}))
-
-    if settings.default_super_admin_username and settings.default_super_admin_password:
-        try:
-            admin_service.bootstrap_super_admin(
-                settings.default_super_admin_username,
-                settings.default_super_admin_password,
-                user_group="bootstrap",
-            )
-        except HTTPException:
-            pass
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    try:
-        require_authenticated_request(request)
-    except HTTPException:
-        return RedirectResponse(url="/admin", status_code=303)
-
+def index():
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = html.replace("{{ initial_program | safe }}", json.dumps(get_state()))
     html = html.replace("{{ initial_step_template | safe }}", json.dumps(STEP_TEMPLATE))
@@ -1063,23 +711,8 @@ def index(request: Request):
 
 
 @app.get("/preview", response_class=HTMLResponse)
-def preview_page(request: Request):
-    try:
-        require_authenticated_request(request)
-    except HTTPException:
-        return RedirectResponse(url="/admin", status_code=303)
+def preview_page():
     return HTMLResponse(content=PREVIEW_FILE.read_text(encoding="utf-8"))
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
-    try:
-        user = require_authenticated_request(request)
-        if str(user.get("role")) == "engineer":
-            return RedirectResponse(url="/", status_code=303)
-    except HTTPException:
-        pass
-    return HTMLResponse(content=ADMIN_FILE.read_text(encoding="utf-8"))
 
 
 @app.get("/api/program")
@@ -1087,289 +720,19 @@ def api_get_program():
     return get_state()
 
 
-@app.post("/api/program/storage-context")
-def api_set_program_storage_context(payload: StorageContextSet):
-    with STATE_LOCK:
-        CURRENT_STORAGE_CONTEXT.clear()
-        CURRENT_STORAGE_CONTEXT.update(payload.model_dump())
-        CURRENT_DATA["storage_context"] = copy.deepcopy(CURRENT_STORAGE_CONTEXT)
-        persist_program_locked()
-        return {
-            "storage_context": copy.deepcopy(CURRENT_STORAGE_CONTEXT),
-            "storage_path": program_storage_path(CURRENT_DATA),
-        }
-
-
-@app.get("/api/admin/bootstrap-state")
-def api_admin_bootstrap_state():
-    return admin_service.bootstrap_state()
-
-
-@app.post("/api/admin/bootstrap")
-def api_admin_bootstrap(payload: LoginRequest):
-    user = admin_service.bootstrap_super_admin(payload.username, payload.password)
-    return {"user": user}
-
-
-@app.post("/api/admin/login")
-def api_admin_login(payload: LoginRequest):
-    login_result = admin_service.login(payload.username, payload.password)
-    response = JSONResponse(content=login_result)
-    response.set_cookie(
-        key=ADMIN_TOKEN_COOKIE,
-        value=login_result["token"],
-        max_age=int(login_result.get("expires_in_seconds", 1800)),
-        httponly=True,
-        samesite="lax",
-    )
-    return response
-
-
-@app.post("/api/admin/logout")
-def api_admin_logout(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    token = resolve_admin_token(request, x_admin_token)
-    admin_service.logout(token)
-    response = JSONResponse(content={"ok": True})
-    response.delete_cookie(ADMIN_TOKEN_COOKIE)
-    return response
-
-
-@app.get("/api/admin/me")
-def api_admin_me(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    user = get_current_admin_user(request, x_admin_token)
-    safe_user = dict(user)
-    safe_user.pop("password_hash", None)
-    return {"user": safe_user}
-
-
-@app.get("/api/admin/tree")
-def api_admin_tree(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    user = get_current_admin_user(request, x_admin_token)
-    if str(user.get("role")) == "engineer":
-        raise HTTPException(status_code=403, detail="Engineer cannot access admin console data")
-    return admin_service.tree_view(user)
-
-
-@app.get("/api/editor/recipes")
-def api_editor_list_recipes(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return {"recipes": admin_service.list_recipes_for_actor(actor)}
-
-
-@app.post("/api/editor/recipes/upsert")
-async def api_editor_upsert_recipe(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
-
-    program = payload.get("program") if isinstance(payload, dict) else None
-    if not isinstance(program, dict):
-        raise HTTPException(status_code=400, detail="Missing program payload")
-
-    recipe_name = str(payload.get("name") or program.get("partname") or "").strip()
-    description = str(payload.get("description") or "Created from Program Editor").strip()
-    saved_recipe = admin_service.upsert_program_recipe(actor, normalize_program(program), recipe_name, description)
-    return {"recipe": saved_recipe}
-
-
-@app.post("/api/admin/users")
-def api_admin_create_user(payload: UserCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.create_user(actor, payload.model_dump())
-
-
-@app.put("/api/admin/users/{user_id}")
-def api_admin_update_user(user_id: str, payload: UserUpdate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.update_user(actor, user_id, payload.model_dump())
-
-
-@app.post("/api/admin/organizations")
-def api_admin_create_org(payload: OrganizationCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    created = admin_service.create_organization(actor, payload.model_dump())
-    return {
-        "organization": created,
-        "bucket_root": f"orgs/{sanitize_path_segment(created['code'])}",
-    }
-
-
-@app.post("/api/admin/branches")
-def api_admin_create_branch(payload: BranchCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.create_branch(actor, payload.model_dump())
-
-
-@app.put("/api/admin/branches/{branch_id}")
-def api_admin_update_branch(branch_id: str, payload: NameCodeUpdate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.update_branch(actor, branch_id, payload.model_dump())
-
-
-@app.post("/api/admin/projects")
-def api_admin_create_project(payload: ProjectCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.create_project(actor, payload.model_dump())
-
-
-@app.put("/api/admin/projects/{project_id}")
-def api_admin_update_project(project_id: str, payload: NameCodeUpdate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.update_project(actor, project_id, payload.model_dump())
-
-
-@app.post("/api/admin/lines")
-def api_admin_create_line(payload: LineCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.create_line(actor, payload.model_dump())
-
-
-@app.put("/api/admin/lines/{line_id}")
-def api_admin_update_line(line_id: str, payload: NameCodeUpdate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.update_line(actor, line_id, payload.model_dump())
-
-
-@app.post("/api/admin/stations")
-def api_admin_create_station(payload: StationCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.create_station(actor, payload.model_dump())
-
-
-@app.put("/api/admin/stations/{station_id}")
-def api_admin_update_station(station_id: str, payload: NameCodeUpdate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.update_station(actor, station_id, payload.model_dump())
-
-
-@app.post("/api/admin/devices")
-def api_admin_create_device(payload: DeviceCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.create_device(actor, payload.model_dump())
-
-
-@app.put("/api/admin/devices/{device_id}")
-def api_admin_update_device(device_id: str, payload: DeviceUpdate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.update_device(actor, device_id, payload.model_dump())
-
-
-@app.post("/api/admin/recipes")
-def api_admin_upsert_recipe(payload: RecipeCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.upsert_recipe(actor, payload.model_dump())
-
-
-@app.post("/api/admin/recipe-device-map")
-def api_admin_recipe_device_map(payload: RecipeDeviceMap, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    return admin_service.map_recipe_to_device(actor, payload.model_dump())
-
-
-@app.get("/list-recipes/{device_id}")
-def api_list_recipes_for_device(device_id: str):
-    """Return all recipes mapped to a device. Called by device clients — no user auth required."""
-    device = admin_service.repo.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    maps = admin_service.repo.list_recipe_device_maps({"device_id": device_id})
-    mapped_names = {m["recipe_name"] for m in maps}
-    if not mapped_names:
-        return {"device_id": device_id, "recipes": []}
-    all_recipes = admin_service.repo.list_recipes()
-    recipes = [
-        {
-            "recipe_id": r["recipe_id"],
-            "name": r["name"],
-            "description": r.get("description", ""),
-            "updated_at": r.get("updated_at", ""),
-        }
-        for r in all_recipes
-        if r["name"] in mapped_names
-    ]
-    return {"device_id": device_id, "recipes": recipes}
-
-
-@app.get("/download-recipe/{device_id}/{part_name}")
-async def api_download_recipe(device_id: str, part_name: str):
-    """Download a zip (JSON + images) for a recipe mapped to a device. Verifies mapping."""
-    device = admin_service.repo.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    maps = admin_service.repo.list_recipe_device_maps({"device_id": device_id})
-    if not any(m["recipe_name"] == part_name for m in maps):
-        raise HTTPException(status_code=403, detail=f"Recipe '{part_name}' is not mapped to this device")
-
-    recipes = admin_service.repo.list_recipes({"name": part_name})
-    if not recipes:
-        raise HTTPException(status_code=404, detail=f"Recipe '{part_name}' not found in database")
-    recipe = recipes[0]
-    safe_part = sanitize_filename(part_name, fallback="program")
-    program = normalize_program(copy.deepcopy(recipe.get("payload", {})))
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Keep the archive layout consistent with the editor download.
-        zf.writestr(f"{safe_part}/", "")
-        zf.writestr(f"{safe_part}/imgs/", "")
-
-        # Program JSON from the database
-        program_json = json.dumps(program, indent=2).encode("utf-8")
-        zf.writestr(f"{safe_part}.json", program_json)
-
-        added_arc = set()
-        for step in program.get("steps", []):
-            image_bytes = resolve_step_image_bytes(program, step)
-            if image_bytes is None:
-                continue
-            step_no = int(step.get("step_no", 0) or 0)
-            if step_no <= 0:
-                continue
-            arc = str(Path(safe_part) / "imgs" / f"{step_no}.png")
-            if arc in added_arc:
-                continue
-            zf.writestr(arc, image_bytes)
-            added_arc.add(arc)
-
-    zip_buffer.seek(0)
-    return Response(
-        content=zip_buffer.read(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{safe_part}.zip"'},
-    )
-
-
-@app.post("/api/admin/stations/{station_id}/activate-storage")
-def api_admin_activate_station_storage(station_id: str, request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    actor = get_current_admin_user(request, x_admin_token)
-    context = admin_service.build_storage_context(actor, station_id)
-    with STATE_LOCK:
-        CURRENT_STORAGE_CONTEXT.clear()
-        CURRENT_STORAGE_CONTEXT.update(context)
-        CURRENT_DATA["storage_context"] = copy.deepcopy(CURRENT_STORAGE_CONTEXT)
-        persist_program_locked()
-        return {
-            "storage_context": copy.deepcopy(CURRENT_STORAGE_CONTEXT),
-            "storage_path": program_storage_path(CURRENT_DATA),
-        }
+@app.post("/api/program")
+def api_set_program(program: Dict[str, Any]):
+    return {"program": set_state(program), "storage_path": str(PROGRAMS_DIR / sanitize_filename(program.get("partname", "program")))}
 
 
 @app.get("/api/programs")
 def api_list_programs():
-    if gcs_enabled():
-        try:
-            return {"programs": list_programs_from_gcs()}
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Unable to list programs from GCS: {exc}") from exc
-
     return {"programs": _list_local_program_names()}
 
 
 @app.post("/api/programs/{program_file}")
 def api_load_program(program_file: str):
-    safe_rel = str(Path(program_file)).replace("\\", "/").lstrip("/")
+    safe_rel = str(Path(program_file)).replace("\\\\", "/").lstrip("/")
     if not safe_rel.lower().endswith(".json"):
         raise HTTPException(status_code=400, detail="Program file must be a .json file")
     if ".." in Path(safe_rel).parts:
@@ -1378,18 +741,13 @@ def api_load_program(program_file: str):
     target = (PROGRAMS_DIR / safe_rel).resolve()
     if not str(target).startswith(str(PROGRAMS_DIR.resolve())):
         raise HTTPException(status_code=400, detail="Invalid program file path")
-    if gcs_enabled():
-        raw = download_bytes_from_gcs(safe_rel)
-        if raw is None:
-            raise HTTPException(status_code=404, detail="Program file not found")
-        program = parse_program_json_bytes(raw, "from bucket")
-    else:
-        if not target.exists() or not target.is_file():
-            raise HTTPException(status_code=404, detail="Program file not found")
-        try:
-            program = json.loads(target.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid program JSON: {exc}") from exc
+
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Program file not found")
+    try:
+        program = json.loads(target.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid program JSON: {exc}") from exc
 
     return set_state(program)
 
@@ -1397,165 +755,26 @@ def api_load_program(program_file: str):
 @app.get("/api/storage-config")
 def api_storage_config():
     return {
-        "gcs_enabled": gcs_enabled(),
-        "direct_upload_threshold_bytes": GCS_DIRECT_UPLOAD_THRESHOLD_BYTES,
-    }
-
-
-@app.post("/api/program")
-def api_set_program(program: Dict[str, Any], request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    saved_program = set_state(program)
-    actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
-    return {
-        "program": saved_program,
-        "recipe": recipe,
-        "storage_path": program_storage_path(saved_program),
+        "remote_storage_enabled": False,
+        "direct_upload_threshold_bytes": DIRECT_UPLOAD_THRESHOLD_BYTES,
+        "programs_dir": str(PROGRAMS_DIR),
     }
 
 
 @app.post("/api/upload")
-async def api_upload(
-    request: Request,
-    file: UploadFile = File(...),
-    x_admin_token: Optional[str] = Header(default=None),
-):
+async def api_upload(file: UploadFile = File(...)):
     raw = await file.read()
     program = parse_program_json_bytes(raw, "file")
     saved_program = set_state(program, persist=True)
-    actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
-    return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
+    return {"program": saved_program, "storage_path": str(PROGRAMS_DIR / sanitize_filename(saved_program.get("partname", "program")))}
 
 
 @app.post("/api/upload-zip")
-async def api_upload_zip(
-    request: Request,
-    file: UploadFile = File(...),
-    x_admin_token: Optional[str] = Header(default=None),
-):
+async def api_upload_zip(file: UploadFile = File(...)):
     raw = await file.read()
     program = parse_program_from_zip_bytes(raw)
-    saved_program = set_state(program, persist=not gcs_enabled())
-    actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
-    return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
-
-
-@app.post("/api/upload-to-gcs")
-async def api_upload_to_gcs(
-    request: Request,
-    file: UploadFile = File(...),
-    x_admin_token: Optional[str] = Header(default=None),
-):
-    raw = await file.read()
-
-    filename = Path(file.filename or "upload.bin").name.lower()
-    if filename.endswith(".json"):
-        program = parse_program_json_bytes(raw, "file")
-        saved_program = set_state(program, persist=True)
-    elif filename.endswith(".zip"):
-        program = parse_program_from_zip_bytes(raw)
-        saved_program = set_state(program, persist=False)
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Upload .json or .zip")
-
-    actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
-    return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
-
-
-@app.post("/api/upload-recipe-session")
-async def api_upload_recipe_session(request: Request):
-    if not gcs_enabled():
-        raise HTTPException(status_code=400, detail="GCS is not enabled")
-
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
-
-    filename = Path(str(payload.get("filename") or "upload.zip")).name
-    if not filename.lower().endswith(".zip"):
-        filename = f"{Path(filename).stem}.zip"
-
-    content_type = str(payload.get("content_type") or "application/zip")
-    size_value = payload.get("size")
-    try:
-        size = int(size_value) if size_value is not None and str(size_value) != "" else None
-    except Exception:
-        size = None
-
-    bucket = get_gcs_bucket()
-    if bucket is None:
-        raise HTTPException(status_code=400, detail="GCS bucket not available")
-
-    # Keep temp objects flat at bucket root so no extra folder-like prefixes are created.
-    staging_blob_name = f"_tmp_upload_{uuid.uuid4().hex}_{filename}"
-    upload_url = bucket.blob(staging_blob_name).create_resumable_upload_session(
-        content_type=content_type,
-        size=size,
-        origin=request.headers.get("origin"),
-    )
-    return {
-        "upload_url": upload_url,
-        "staging_blob_name": staging_blob_name,
-    }
-
-
-@app.post("/api/finalize-recipe-upload")
-async def api_finalize_recipe_upload(request: Request, x_admin_token: Optional[str] = Header(default=None)):
-    if not gcs_enabled():
-        raise HTTPException(status_code=400, detail="GCS is not enabled")
-
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
-
-    staging_blob_name = str(payload.get("staging_blob_name") or "").strip()
-    if not staging_blob_name:
-        raise HTTPException(status_code=400, detail="Missing staging_blob_name")
-
-    bucket = get_gcs_bucket()
-    if bucket is None:
-        raise HTTPException(status_code=400, detail="GCS bucket not available")
-
-    blob = bucket.blob(staging_blob_name)
-    try:
-        raw = blob.download_as_bytes()
-    except NotFound as exc:
-        raise HTTPException(status_code=404, detail="Uploaded recipe not found in bucket") from exc
-
-    try:
-        program = parse_program_from_zip_bytes(raw)
-        saved_program = set_state(program, persist=False)
-        actor = get_current_admin_user(request, x_admin_token)
-        recipe = admin_service.upsert_program_recipe(actor, saved_program)
-        return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
-    finally:
-        try:
-            blob.delete()
-        except Exception:
-            pass
-
-
-@app.post("/api/upload-image-to-gcs")
-async def api_upload_image_to_gcs(
-    file: UploadFile = File(...),
-    partname: str = Form(...),
-    step_no: int = Form(...),
-):
-    raw = await file.read()
-    if not gcs_enabled():
-        raise HTTPException(status_code=400, detail="GCS is not enabled")
-
-    part = sanitize_filename(partname, fallback="program")
-    image_name = f"{int(step_no)}.png"
-    # Flat GCS layout: program_editor/programs/<part>/imgs/<step>.png
-    gcs_rel = f"programs/{part}/imgs/{image_name}"
-    upload_bytes_to_gcs(gcs_rel, raw, file.content_type or "image/png")
-    return {"storage_path": f"/programs/{part}/imgs/{image_name}"}
+    saved_program = set_state(program, persist=True)
+    return {"program": saved_program, "storage_path": str(PROGRAMS_DIR / sanitize_filename(saved_program.get("partname", "program")))}
 
 
 @app.put("/api/steps/{index}")
@@ -1583,6 +802,51 @@ def api_clone_step(index: int):
     return insert_step_after(index, cloned)
 
 
+@app.post("/api/reorder-steps")
+def api_reorder_steps(payload: Dict[str, Any]):
+    order: List[int] = payload.get("order", [])
+    with STATE_LOCK:
+        steps = CURRENT_DATA.get("steps", [])
+        n = len(steps)
+        if not order or sorted(order) != list(range(n)):
+            raise HTTPException(status_code=400, detail="Invalid order: must be a permutation of all step indices")
+
+        part = sanitize_filename(CURRENT_DATA.get("partname", "program"))
+        image_dir = PROGRAMS_DIR / part / "imgs"
+
+        # Phase 1: rename existing images to temp names (avoids collisions)
+        for i, old_idx in enumerate(order):
+            old_path = image_dir / f"{old_idx + 1}.png"
+            tmp_path = image_dir / f"_tmp_{i}.png"
+            if old_path.exists():
+                old_path.replace(tmp_path)
+
+        # Phase 2: rename temp names to final step numbers
+        for i in range(n):
+            tmp_path = image_dir / f"_tmp_{i}.png"
+            new_path = image_dir / f"{i + 1}.png"
+            if tmp_path.exists():
+                tmp_path.replace(new_path)
+
+        # Reorder steps, update step_no, bc_parent/bc_child, and image paths
+        new_steps = []
+        for i, old_idx in enumerate(order):
+            step = copy.deepcopy(steps[old_idx])
+            step["step_no"] = i + 1
+            step["bc_parent"] = (i == 0)
+            step["bc_child"] = (i != 0)
+            new_image_path = image_dir / f"{i + 1}.png"
+            if new_image_path.exists():
+                step["upload_image"] = f"/programs/{part}/imgs/{i + 1}.png"
+            else:
+                step["upload_image"] = ""
+            new_steps.append(step)
+
+        CURRENT_DATA["steps"] = new_steps
+        persist_program_locked()
+        return copy.deepcopy(CURRENT_DATA)
+
+
 @app.get("/download")
 def download_program():
     program = get_state()
@@ -1605,7 +869,6 @@ def download_recipe_zip():
 
     mem = io.BytesIO()
     with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        # Keep a stable recipe layout: <part>.json and <part>/ image folder.
         zf.writestr(f"{part}/", "")
         zf.writestr(f"{part}/imgs/", "")
         zf.writestr(f"{part}.json", json.dumps(program, indent=4))
@@ -1618,7 +881,6 @@ def download_recipe_zip():
             step_no = int(step.get("step_no", 0) or 0)
             if step_no <= 0:
                 continue
-            # Always place recipe images inside <part>/imgs in the ZIP.
             arc = str(Path(part) / "imgs" / f"{step_no}.png")
             if arc in added_arc:
                 continue
@@ -1679,22 +941,6 @@ async def download_steps_wi_pdf(request: Request):
 @app.get("/api/template")
 def api_template():
     return copy.deepcopy(STEP_TEMPLATE)
-
-
-if GCS_BUCKET_NAME:
-
-    @app.get("/programs/{asset_path:path}")
-    def serve_program_asset(asset_path: str):
-        rel = str(asset_path).replace("\\", "/").lstrip("/")
-        if not rel:
-            raise HTTPException(status_code=404, detail="Program asset not found")
-
-        payload = read_program_asset_bytes(rel)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Program asset not found")
-
-        media_type = mimetypes.guess_type(rel)[0] or "application/octet-stream"
-        return Response(content=payload, media_type=media_type)
 
 
 if __name__ == "__main__":
