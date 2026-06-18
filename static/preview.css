@@ -53,7 +53,7 @@ body.preview-body {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0.85rem;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(0,0,0,.08);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -64,7 +64,7 @@ body.preview-body {
   padding: 0.65rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff, #faf7f3);
+  background: #ffffff;
 }
 
 .preview-page-head .eyebrow {
@@ -112,9 +112,9 @@ body.preview-body {
 }
 
 .preview-field {
-  border: 1px solid rgba(213, 219, 234, 0.85);
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff, #fbfcfe);
+  background: #ffffff;
   padding: 0.45rem 0.55rem;
 }
 

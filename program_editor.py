@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -303,20 +303,56 @@ def mode_pdf_style(mode: str) -> Dict[str, str]:
     )
 
 
+_BARCODE_KEYS = [
+    "bc_title", "bc_parent", "bc_child", "whatloc_enabled",
+    "enable_barcode_mes_t", "enable_barcode_mes_nt",
+    "restart_on_failure", "reg_ex_validator",
+]
+_WHATLOC_KEYS = ["check_short_workstation", "check_part_number", "check_ref_designator"]
+_ACK_KEYS = ["ack_title", "enable_ack_mes"]
+_FASTENING_KEYS = [
+    "target_preset", "target_torque", "target_angle",
+    "target_min_angle", "target_max_angle", "target_tolerance", "target_rpm",
+    "TC_AM", "AC_TM", "screw_info", "mes_enable_assy",
+    "snug_torque", "free_fastening_angle", "soft_start",
+    "free_fastening_speed", "torque_rising_rate",
+    "seating_point", "ramp_up_speed", "torque_compensation",
+]
+
+
 def visible_step_entries(step: Dict[str, Any], include_checkbox_fields: bool = True) -> List[tuple]:
-    entries = []
-    for key, value in step.items():
-        if key in {"upload_image", "step_no"}:
-            continue
+    entries: List[tuple] = []
+
+    def _add(key: str) -> None:
+        value = step.get(key)
         if value in ("", None):
-            continue
+            return
         if not include_checkbox_fields and isinstance(value, bool):
-            continue
-        if isinstance(value, bool):
-            display = "Yes" if value else "No"
-        else:
-            display = str(value)
+            return
+        display = ("Yes" if value else "No") if isinstance(value, bool) else str(value)
         entries.append((prettify_step_key(key), display))
+
+    # Always show step number and remarks
+    step_no = step.get("step_no")
+    if step_no is not None:
+        entries.append(("Step No", str(step_no)))
+    if step.get("remarks"):
+        entries.append(("Remarks", str(step["remarks"])))
+
+    # Mode-specific fields
+    if step.get("enable_barcode"):
+        for k in _BARCODE_KEYS:
+            _add(k)
+            if k == "whatloc_enabled" and step.get("whatloc_enabled"):
+                for wk in _WHATLOC_KEYS:
+                    _add(wk)
+    elif step.get("request_ack"):
+        for k in _ACK_KEYS:
+            _add(k)
+    elif step.get("enable_fastening"):
+        for k in _FASTENING_KEYS:
+            _add(k)
+
     return entries
 
 
@@ -761,14 +797,6 @@ def api_storage_config():
     }
 
 
-@app.post("/api/upload")
-async def api_upload(file: UploadFile = File(...)):
-    raw = await file.read()
-    program = parse_program_json_bytes(raw, "file")
-    saved_program = set_state(program, persist=True)
-    return {"program": saved_program, "storage_path": str(PROGRAMS_DIR / sanitize_filename(saved_program.get("partname", "program")))}
-
-
 @app.post("/api/upload-zip")
 async def api_upload_zip(file: UploadFile = File(...)):
     raw = await file.read()
@@ -845,18 +873,6 @@ def api_reorder_steps(payload: Dict[str, Any]):
         CURRENT_DATA["steps"] = new_steps
         persist_program_locked()
         return copy.deepcopy(CURRENT_DATA)
-
-
-@app.get("/download")
-def download_program():
-    program = get_state()
-    payload = json.dumps(program, indent=4)
-    filename = f"{sanitize_filename(program.get('partname'))}.json"
-    return Response(
-        content=payload,
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
 
 
 @app.get("/download-recipe")
@@ -941,6 +957,11 @@ async def download_steps_wi_pdf(request: Request):
 @app.get("/api/template")
 def api_template():
     return copy.deepcopy(STEP_TEMPLATE)
+
+
+@app.get("/{full_path:path}")
+def catch_all(full_path: str):
+    return RedirectResponse(url="/")
 
 
 if __name__ == "__main__":

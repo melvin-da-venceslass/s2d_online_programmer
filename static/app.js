@@ -1894,6 +1894,12 @@ async function saveStep(showProgress = true) {
   syncProgramInfoToState();
   const payload = collectFormStep();
 
+  // Warn if no mode selected
+  if (!payload.enable_barcode && !payload.request_ack && !payload.enable_fastening) {
+    alert(`Step ${payload.step_no} has no mode selected. Please choose Barcode, Acknowledgement, or Fastening.`);
+    return false;
+  }
+
   if (showProgress) {
     showUploadOverlay('Saving step', 'Preparing step save...');
     updateProgress(12, 'Preparing step save...');
@@ -1945,6 +1951,13 @@ async function saveStep(showProgress = true) {
 }
 
 async function saveProgram() {
+  // Warn if any step has no mode
+  const noModeSteps = state.program.steps
+    .filter(s => !s.enable_barcode && !s.request_ack && !s.enable_fastening)
+    .map(s => s.step_no);
+  if (noModeSteps.length > 0) {
+    if (!confirm(`Step(s) ${noModeSteps.join(', ')} have no mode selected (Barcode / Acknowledgement / Fastening). Save anyway?`)) return;
+  }
   if (state.dirty) {
     const saved = await saveStep(false);
     if (!saved) {
@@ -2297,19 +2310,21 @@ function bindEvents() {
       window.open('/preview', '_blank', 'noopener,noreferrer');
     });
   }
-  els.downloadBtn.addEventListener('click', async (event) => {
-    event.preventDefault();
-    const payload = buildDownloadPayload();
-    const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${sanitizeFilename(payload.partname)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
+  if (els.downloadBtn) {
+    els.downloadBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      const payload = buildDownloadPayload();
+      const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${sanitizeFilename(payload.partname)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  }
   els.downloadPdfBtn.addEventListener('click', async () => {
     const payload = buildDownloadPayload();
     const response = await fetch('/download-pdf', {
@@ -2363,18 +2378,6 @@ function bindEvents() {
     card.addEventListener('click', () => {
       setExclusiveMode(card.querySelector('h3').textContent);
     });
-  });
-
-  els.uploadFile.addEventListener('change', async () => {
-    const file = els.uploadFile.files[0];
-    if (!file) return;
-    if (state.dirty) {
-      alert('Save the current step before uploading new data.');
-      els.uploadFile.value = '';
-      return;
-    }
-    await uploadProgram(file);
-    els.uploadFile.value = '';
   });
 
   els.uploadZipFile.addEventListener('change', async () => {
@@ -2465,8 +2468,9 @@ function bindEvents() {
 }
 
 async function init() {
-  state.program = isReloadNavigation() ? blankProgram() : deepClone(window.INITIAL_PROGRAM);
-  const hasProgram = state.program && Array.isArray(state.program.steps) && state.program.steps.length > 0;
+  // Always start with a blank program on fresh load
+  state.program = blankProgram();
+  const hasProgram = true;
   setEditorUnlocked(hasProgram);
   setSidebarSectionCollapsed('partRecipe', false);
   setSidebarSectionCollapsed('steps', false);
@@ -2480,6 +2484,15 @@ async function init() {
   });
   renderEditor();
   loadStorageConfig();
+
+  // Hide app loader after minimum 1 second
+  const loader = document.getElementById('app-loader');
+  if (loader) {
+    setTimeout(() => {
+      loader.style.opacity = '0';
+      setTimeout(() => loader.remove(), 400);
+    }, 1000);
+  }
 }
 
 init();
