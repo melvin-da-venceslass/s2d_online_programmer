@@ -15,3 +15,4 @@ secrets
 .secrets
 programs/IBE333333_A.json
 .DS_Store
+deploy.sh
