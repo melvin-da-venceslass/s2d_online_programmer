@@ -7,6 +7,22 @@
 # =============================================================================
 set -euo pipefail
 
+# ── Colour helpers & functions (defined first so err() is available) ──────────
+RED='\033[0;31m'; ORANGE='\033[0;33m'; NC='\033[0m'; BOLD='\033[1m'
+info()  { echo -e "${ORANGE}${BOLD}[INFO]${NC}  $*"; }
+ok()    { echo -e "\033[0;32m${BOLD}[ OK ]${NC}  $*"; }
+skip()  { echo -e "\033[0;36m${BOLD}[SKIP]${NC}  $*"; }
+err()   { echo -e "${RED}${BOLD}[ERR ]${NC}  $*" >&2; exit 1; }
+
+# ── Root check ────────────────────────────────────────────────────────────────
+[[ $EUID -ne 0 ]] && err "Run this script as root: sudo bash deploy.sh [-f]"
+
+# ── Parse flags ───────────────────────────────────────────────────────────────
+FORCE=0
+for arg in "$@"; do
+  [[ "$arg" == "-f" ]] && FORCE=1
+done
+
 # ── Configurable variables ────────────────────────────────────────────────────
 SECRETS_FILE="/etc/s2d_programmer/secrets"
 if [[ ! -f "$SECRETS_FILE" ]]; then
@@ -29,22 +45,6 @@ APP_PORT="8000"
 APP_WORKERS="2"                              # gunicorn worker count
 PROGRAMS_DIR="/home/mviis/programs"
 COMMIT_TRACE_FILE="${INSTALL_DIR}/.last_deployed_commit"
-
-# ── Parse flags ───────────────────────────────────────────────────────────────
-FORCE=0
-for arg in "$@"; do
-  [[ "$arg" == "-f" ]] && FORCE=1
-done
-
-# ── Colour helpers ────────────────────────────────────────────────────────────
-RED='\033[0;31m'; ORANGE='\033[0;33m'; NC='\033[0m'; BOLD='\033[1m'
-info()  { echo -e "${ORANGE}${BOLD}[INFO]${NC}  $*"; }
-ok()    { echo -e "\033[0;32m${BOLD}[ OK ]${NC}  $*"; }
-skip()  { echo -e "\033[0;36m${BOLD}[SKIP]${NC}  $*"; }
-err()   { echo -e "${RED}${BOLD}[ERR ]${NC}  $*" >&2; exit 1; }
-
-# ── Root check ────────────────────────────────────────────────────────────────
-[[ $EUID -ne 0 ]] && err "Run this script as root: sudo bash deploy.sh [-f]"
 
 # ── 1. Pull / clone latest code ───────────────────────────────────────────────
 info "Step 1 — Pulling latest code from Git..."
