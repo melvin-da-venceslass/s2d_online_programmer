@@ -113,20 +113,10 @@ fi
 "${VENV_DIR}/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" -q
 ok "Python requirements installed."
 
-# ── 4. Build – compile .py files (bytecode) as the 'package' ─────────────────
+# ── 4. Build – compile .py files to bytecode ─────────────────────────────────
 info "Step 4 — Compiling Python bytecode..."
 "${VENV_DIR}/bin/python" -m compileall -q "$INSTALL_DIR"
-ok "Bytecode compiled."
-
-# ── Clean source files (keep bytecode + assets, remove raw .py / .sh) ────────
-info "Step 4b — Cleaning source files (keeping bytecode + assets)..."
-# Remove .py source — bytecode in __pycache__ dirs is sufficient to run
-find "$INSTALL_DIR" -type f -name "*.py" \
-    ! -path "${VENV_DIR}/*" \
-    -delete
-# Remove shell scripts from the installed copy (not needed at runtime)
-find "$INSTALL_DIR" -maxdepth 1 -name "*.sh" -delete
-ok "Source files cleaned."
+ok "Bytecode compiled (source .py files retained — required by Python import system)."
 
 # ── Save deployed commit trace ────────────────────────────────────────────────
 echo "$REMOTE_COMMIT" > "$COMMIT_TRACE_FILE"
