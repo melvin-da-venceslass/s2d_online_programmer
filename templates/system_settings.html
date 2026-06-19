@@ -3,11 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>System Settings – Program Editor</title>
+  <title>System Settings – SAGS</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <style>
-    html, body { height: auto; overflow-y: auto; }
-    .ss-page { max-width: 760px; width: 100%; margin: 48px auto; padding: 0 24px 80px; box-sizing: border-box; }
+    html, body { height: auto; overflow-y: auto;
+      background-color: #f7f8fa;
+      background-image: linear-gradient(rgba(35,38,41,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(35,38,41,.06) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    .ss-page {  width: 100%; margin: 48px auto; padding: 0 24px 80px; box-sizing: border-box; }
     .ss-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 24px; }
     .ss-card h2 { margin: 0 0 6px; font-size: 1.15rem; font-weight: 700; color: #232629; }
     .ss-card p.desc { margin: 0 0 20px; font-size: .85rem; color: #6b7a95; }
@@ -41,76 +45,19 @@
     <div class="app-brand">
       <div class="app-logo">PE</div>
       <div>
-        <span class="app-name">Program Editor</span>
-        <span class="app-tagline">SAGS · MVIIS</span>
+        <span class="app-name">Smart Assembly Guidance System</span>
+        <span class="app-tagline">· MVIIS ·</span>
       </div>
     </div>
     <ul class="app-nav-links">
       <li><a class="app-nav-link" href="/recipe-management">Recipes</a></li>
-      <li><a class="app-nav-link" href="/editor">Editor</a></li>
-      <li><a class="app-nav-link" href="/preview">Preview</a></li>
-      <li><a class="app-nav-link" href="/configure">Configure</a></li>
+      <li><a class="app-nav-link" href="/configure">Kitchen</a></li>
       <li><a class="app-nav-link is-active" href="/system-settings">System</a></li>
     </ul>
   </nav>
 
   <div class="ss-page">
-
-    <!-- Power -->
-    <div class="ss-card">
-      <h2>Power Controls</h2>
-      <p class="desc">Control the system power state. These actions are immediate and irreversible.</p>
-      <div class="ss-actions">
-        <button class="ss-action-btn danger" data-action="shutdown">
-          <span class="btn-label">Shutdown</span>
-          <span class="btn-sub">sudo shutdown now</span>
-        </button>
-        <button class="ss-action-btn danger" data-action="reboot">
-          <span class="btn-label">Reboot</span>
-          <span class="btn-sub">sudo reboot now</span>
-        </button>
-        <button class="ss-action-btn" data-action="reset">
-          <span class="btn-label">Reset Display</span>
-          <span class="btn-sub">sudo pkill Xorg</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Date / Time -->
-    <div class="ss-card">
-      <h2>Date &amp; Time</h2>
-      <p class="desc">Sync the server's date and time with your browser's current time, or set a custom value.</p>
-      <div class="dt-row">
-        <div>
-          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Date &amp; Time</label>
-          <input type="datetime-local" id="dt-input" />
-        </div>
-        <button id="dt-now-btn" class="secondary" type="button">Use Browser Time</button>
-        <button id="dt-set-btn" class="primary" type="button">Update System Time</button>
-      </div>
-      <p id="ss-status"></p>
-    </div>
-
-    <!-- Clear Logs -->
-    <div class="ss-card">
-      <h2>Clear Logs</h2>
-      <p class="desc">Permanently delete all files in the selected log directory. This action cannot be undone.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;">
-        <div>
-          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Log Type</label>
-          <select id="cl-log-type" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;">
-            <option value="system">System Log</option>
-            <option value="conduit">Conduit Log</option>
-            <option value="assy">Assy Log</option>
-            <option value="all">All Logs</option>
-          </select>
-        </div>
-        <button id="cl-clear-btn" class="danger" type="button">Clear Logs</button>
-      </div>
-      <p id="cl-status" style="font-size:.85rem;min-height:20px;margin-top:10px;"></p>
-    </div>
-
-    <!-- Download Logs -->
+<!-- Download Logs -->
     <div class="ss-card">
       <h2>Download Logs</h2>
       <p class="desc">Export system, conduit, or assembly logs filtered by date range.</p>
@@ -138,6 +85,90 @@
       <p id="dl-status" style="font-size:.85rem;min-height:20px;margin-top:10px;"></p>
     </div>
 
+        <!-- Date / Time -->
+    <div class="ss-card">
+      <h2>Date &amp; Time</h2>
+      <p class="desc">Sync the server's date and time with your browser's current time, or set a custom value.</p>
+      <div class="dt-row">
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Date &amp; Time</label>
+          <input type="datetime-local" id="dt-input" />
+        </div>
+        <button id="dt-now-btn" class="secondary" type="button">Use Browser Time</button>
+        <button id="dt-set-btn" class="primary" type="button">Update System Time</button>
+      </div>
+      <p id="ss-status"></p>
+    </div>
+
+    <!-- Power -->
+    <div class="ss-card">
+      <h2>Power Controls</h2>
+      <p class="desc">Control the system power state. These actions are immediate and irreversible.</p>
+      <div class="ss-actions">
+        <button class="ss-action-btn danger" data-action="shutdown">
+          <span class="btn-label">Shutdown</span>
+          <span class="btn-sub">sudo shutdown now</span>
+        </button>
+        <button class="ss-action-btn danger" data-action="reboot">
+          <span class="btn-label">Reboot</span>
+          <span class="btn-sub">sudo reboot now</span>
+        </button>
+        <button class="ss-action-btn" data-action="reset">
+          <span class="btn-label">Reset Display</span>
+          <span class="btn-sub">sudo pkill Xorg</span>
+        </button>
+      </div>
+    </div>
+
+
+
+    <!-- Clear Logs -->
+    <div class="ss-card">
+      <h2>Clear Logs</h2>
+      <p class="desc">Permanently delete all files in the selected log directory. This action cannot be undone.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;">
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Log Type</label>
+          <select id="cl-log-type" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;">
+            <option value="system">System Log</option>
+            <option value="conduit">Conduit Log</option>
+            <option value="assy">Assy Log</option>
+            <option value="all">All Logs</option>
+          </select>
+        </div>
+        <button id="cl-clear-btn" class="danger" type="button">Clear Logs</button>
+      </div>
+      <p id="cl-status" style="font-size:.85rem;min-height:20px;margin-top:10px;"></p>
+    </div>
+
+    <!-- Change Credentials -->
+    <div class="ss-card">
+      <h2>Change Credentials</h2>
+      <p class="desc">Update the administrator username and password.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Current Password</label>
+          <input type="password" id="cc-current-pw" placeholder="Current password" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">New Username</label>
+          <input type="text" id="cc-new-user" placeholder="New username" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">New Password</label>
+          <input type="password" id="cc-new-pw" placeholder="New password (min 6 chars)" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Confirm New Password</label>
+          <input type="password" id="cc-confirm-pw" placeholder="Repeat new password" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;box-sizing:border-box;" />
+        </div>
+      </div>
+      <div style="margin-top:16px;">
+        <button id="cc-save-btn" class="primary" type="button">Update Credentials</button>
+      </div>
+      <p id="cc-status" style="font-size:.85rem;min-height:20px;margin-top:10px;"></p>
+    </div>
+
   </div>
 
   <!-- Confirm Modal -->
@@ -153,8 +184,8 @@
   </div>
 
   <div id="app-loader" style="position:fixed;inset:0;z-index:9999;background:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s;">
-    <div style="font-size:2rem;font-weight:800;color:#232629;letter-spacing:-.5px;">Program Editor</div>
-    <div style="margin-top:10px;color:#232629;opacity:.55;font-size:1rem;">SAGS · MVIIS</div>
+    <div style="font-size:2rem;font-weight:800;color:#232629;letter-spacing:-.5px;">Smart Assembly Guidance System</div>
+    <div style="margin-top:10px;color:#232629;opacity:.55;font-size:1rem;">· MVIIS ·</div>
     <div style="margin-top:24px;width:40px;height:40px;border:4px solid rgba(35,38,41,.15);border-top-color:#FF7733;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
   </div>
   <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
@@ -163,5 +194,24 @@
   </footer>
   <script src="/static/system_settings.js"></script>
   <script src="/static/nav_loader.js"></script>
+  <script src="/static/idle_logout.js"></script>
+
+  <!-- Logout button in nav toolbar -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const nav = document.querySelector('.app-nav');
+      if (nav) {
+        const logoutBtn = document.createElement('button');
+        logoutBtn.textContent = 'Logout';
+        logoutBtn.className = 'secondary';
+        logoutBtn.style.cssText = 'margin-left:12px;font-size:.8rem;';
+        logoutBtn.addEventListener('click', async () => {
+          await fetch('/api/auth/logout', { method: 'POST' });
+          window.location.replace('/login');
+        });
+        nav.appendChild(logoutBtn);
+      }
+    });
+  </script>
 </body>
 </html>

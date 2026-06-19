@@ -2491,22 +2491,25 @@ function bindEvents() {
 }
 
 async function init() {
-  // If redirected from Recipe Management, load the server-side program state
-  const autoLoad = sessionStorage.getItem('rm_auto_load');
+  // Access guard: only allow entry from Recipe Management
+  const fromRM = sessionStorage.getItem('rm_auto_load');
+  const sessionActive = sessionStorage.getItem('rm_recipe_active');
+  if (!fromRM && !sessionActive) {
+    window.location.replace('/recipe-management');
+    return;
+  }
   sessionStorage.removeItem('rm_auto_load');
-  if (autoLoad) {
-    try {
-      const resp = await fetch('/api/program');
-      if (resp.ok) {
-        const data = await resp.json();
-        state.program = (data && data.program) ? data.program : data;
-      } else {
-        state.program = blankProgram();
-      }
-    } catch (_) {
+  sessionStorage.setItem('rm_recipe_active', '1');
+
+  try {
+    const resp = await fetch('/api/program');
+    if (resp.ok) {
+      const data = await resp.json();
+      state.program = (data && data.program) ? data.program : data;
+    } else {
       state.program = blankProgram();
     }
-  } else {
+  } catch (_) {
     state.program = blankProgram();
   }
   const hasProgram = true;

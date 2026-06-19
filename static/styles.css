@@ -2,7 +2,7 @@
   --nav: #232629;
   --nav-text: rgba(255,255,255,.66);
   --nav-active: #ffffff;
-  --bg: #ffffff;
+  --bg: #f7f8fa;
   --panel: #ffffff;
   --panel-2: #ffffff;
   --card: #ffffff;
@@ -25,7 +25,12 @@ body {
   overflow: hidden;
   font-family: Inter, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   color: var(--text);
-  background: var(--bg);
+  background-color: var(--bg);
+  /* Subtle line-grid pattern */
+  background-image:
+    linear-gradient(rgba(35,38,41,.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(35,38,41,.06) 1px, transparent 1px);
+  background-size: 32px 32px;
   -webkit-font-smoothing: antialiased;
 }
 

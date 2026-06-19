@@ -181,3 +181,42 @@ document.getElementById('dl-download-btn').addEventListener('click', async () =>
     document.getElementById('dl-download-btn').disabled = false;
   }
 });
+
+// ── Change Credentials ────────────────────────────────────────────────────────
+
+document.getElementById('cc-save-btn').addEventListener('click', async () => {
+  const currentPw  = document.getElementById('cc-current-pw').value;
+  const newUser    = document.getElementById('cc-new-user').value.trim();
+  const newPw      = document.getElementById('cc-new-pw').value;
+  const confirmPw  = document.getElementById('cc-confirm-pw').value;
+  const ccStatus   = document.getElementById('cc-status');
+
+  ccStatus.className = '';
+  if (!currentPw) { ccStatus.textContent = 'Enter your current password.'; ccStatus.className = 'error'; return; }
+  if (!newUser)   { ccStatus.textContent = 'New username cannot be empty.'; ccStatus.className = 'error'; return; }
+  if (newPw.length < 6) { ccStatus.textContent = 'New password must be at least 6 characters.'; ccStatus.className = 'error'; return; }
+  if (newPw !== confirmPw) { ccStatus.textContent = 'New passwords do not match.'; ccStatus.className = 'error'; return; }
+
+  document.getElementById('cc-save-btn').disabled = true;
+  ccStatus.textContent = 'Saving…';
+  try {
+    const resp = await fetch('/api/auth/change-credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPw, new_username: newUser, new_password: newPw }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) { ccStatus.textContent = data.detail || `Error ${resp.status}`; ccStatus.className = 'error'; return; }
+    ccStatus.textContent = 'Credentials updated. You will need to log in again next session.';
+    ccStatus.className = 'ok';
+    document.getElementById('cc-current-pw').value = '';
+    document.getElementById('cc-new-pw').value = '';
+    document.getElementById('cc-confirm-pw').value = '';
+  } catch (e) {
+    ccStatus.textContent = `Failed: ${e}`;
+    ccStatus.className = 'error';
+  } finally {
+    document.getElementById('cc-save-btn').disabled = false;
+  }
+});
+

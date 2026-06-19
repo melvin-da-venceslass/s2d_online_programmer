@@ -1,0 +1,17 @@
+In recipe management window introduce two options 
+1. Create New Recipe -> Ask for the Recipe name(a) partname then create a sample json, 
+    and folder structure in the bacgorund and add it to the recipe list.
+
+2. remvoe the following freatures from the UI (editor Screen)
+    1. save-recipe-btn 
+    2.part-tab-bar and children
+    3.new-part-btn
+
+3. remvoe the following freatures from the UI (preview Screen) <section class="card">
+        <h2>Load Part</h2>
+        <label>Part / Program
+          <select id="preview-load-recipe-select"><option value="">-- Select Program --</option><option value="Melvin.json">Melvin</option><option value="TEST_0001.json">TEST_0001</option></select>
+        </label>
+        <button id="preview-load-part-btn" class="primary full" type="button">Load Part</button>
+        <p id="preview-load-part-status" class="recipe-status"></p>
+      </section>

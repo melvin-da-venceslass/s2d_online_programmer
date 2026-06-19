@@ -387,6 +387,16 @@ function bindEvents() {
 }
 
 (async function init() {
+  // Access guard: only allow entry from Recipe Management
+  const fromRM = sessionStorage.getItem('rm_auto_load');
+  const sessionActive = sessionStorage.getItem('rm_recipe_active');
+  if (!fromRM && !sessionActive) {
+    window.location.replace('/recipe-management');
+    return;
+  }
+  sessionStorage.removeItem('rm_auto_load');
+  sessionStorage.setItem('rm_recipe_active', '1');
+
   bindEvents();
   await refreshProgramSelect();
   try {

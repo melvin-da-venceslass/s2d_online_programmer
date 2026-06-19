@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login – SAGS</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      font-family: Inter, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+      background-color: #f7f8fa;
+      background-image:
+        linear-gradient(rgba(35,38,41,.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(35,38,41,.06) 1px, transparent 1px);
+      background-size: 32px 32px;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .login-wrap {
+      width: 100%; max-width: 400px; padding: 0 20px;
+    }
+
+    .login-brand {
+      text-align: center; margin-bottom: 32px;
+    }
+    .login-logo {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 100px; height: 56px; border-radius: 14px;
+      background: #232629; color: #fff;
+      font-size: 1.4rem; font-weight: 800; letter-spacing: -.5px;
+      margin-bottom: 14px;
+    }
+    .login-brand h1 {
+      margin: 0 0 4px; font-size: 1.45rem; font-weight: 800; color: #232629; letter-spacing: -.4px;
+    }
+    .login-brand p {
+      margin: 0; font-size: .82rem; color: #6b7a95;
+    }
+
+    .login-card {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 36px 36px 32px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.08);
+    }
+    .login-card h2 {
+      margin: 0 0 6px; font-size: 1.05rem; font-weight: 700; color: #232629;
+    }
+    .login-card .sub {
+      margin: 0 0 24px; font-size: .83rem; color: #6b7a95;
+    }
+
+    .field { margin-bottom: 16px; }
+    .field label {
+      display: block; font-size: .78rem; font-weight: 600; color: #4b5b76; margin-bottom: 5px;
+    }
+    .field input {
+      width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 7px;
+      font-size: .93rem; color: #232629; background: #f8fafc;
+      transition: border-color .15s, box-shadow .15s;
+      outline: none;
+    }
+    .field input:focus {
+      border-color: #FF7733; box-shadow: 0 0 0 3px rgba(255,119,51,.15);
+      background: #fff;
+    }
+
+    .login-btn {
+      width: 100%; padding: 11px; margin-top: 6px;
+      background: #FF7733; color: #fff; border: none; border-radius: 7px;
+      font-size: .95rem; font-weight: 700; cursor: pointer;
+      transition: background .15s, transform .08s;
+    }
+    .login-btn:hover { background: #e6651f; }
+    .login-btn:active { transform: scale(.98); }
+    .login-btn:disabled { background: #f0a070; cursor: not-allowed; }
+
+    #login-error {
+      display: none; margin-top: 14px; padding: 10px 14px;
+      background: #fff5f5; border: 1px solid #fecaca; border-radius: 7px;
+      color: #dc2626; font-size: .84rem; text-align: center;
+    }
+    #login-error.visible { display: block; }
+
+    footer {
+      text-align: center; margin-top: 24px;
+      font-size: .7rem; color: #9ba8bc;
+    }
+    footer strong { color: #FF7733; }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-brand">
+      <div class="login-logo">i-SAGS</div>
+      <h1>Interactive Smart Assembly Guidance System</h1>
+      <p>SAGS · MVIIS</p>
+    </div>
+
+    <div class="login-card">
+      <h2>Sign in to continue</h2>
+      <p class="sub">Enter your administrator credentials.</p>
+
+      <form id="login-form" autocomplete="on">
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" type="text" placeholder="Username" autocomplete="username" required />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required />
+        </div>
+        <button class="login-btn" type="submit" id="login-btn">Sign In</button>
+        <div id="login-error">Invalid username or password.</div>
+      </form>
+    </div>
+
+    <footer>
+      Solution by <strong>Melvin</strong> &amp; <strong>Venfra Innovative Industrial Solutions</strong> — MVIIS &copy; 2021
+    </footer>
+  </div>
+
+  <script>
+    'use strict';
+    const form  = document.getElementById('login-form');
+    const btn   = document.getElementById('login-btn');
+    const error = document.getElementById('login-error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.classList.remove('visible');
+      btn.disabled = true;
+      btn.textContent = 'Signing in…';
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          window.location.replace(data.redirect || '/recipe-management');
+        } else {
+          error.classList.add('visible');
+        }
+      } catch (_) {
+        error.textContent = 'Connection error. Try again.';
+        error.classList.add('visible');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+      }
+    });
+  </script>
+</body>
+</html>

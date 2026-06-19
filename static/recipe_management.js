@@ -18,6 +18,50 @@ const deleteBody    = document.getElementById('delete-modal-body');
 const deleteCancel  = document.getElementById('delete-modal-cancel');
 const deleteConfirm = document.getElementById('delete-modal-confirm');
 
+// Create modal
+const createModal   = document.getElementById('create-modal');
+const createInput   = document.getElementById('create-modal-input');
+const createError   = document.getElementById('create-modal-error');
+const createCancel  = document.getElementById('create-modal-cancel');
+const createConfirm = document.getElementById('create-modal-confirm');
+
+document.getElementById('create-recipe-btn').addEventListener('click', () => {
+  createInput.value = '';
+  createError.textContent = '';
+  createModal.classList.add('open');
+  setTimeout(() => createInput.focus(), 80);
+});
+
+createCancel.addEventListener('click', () => createModal.classList.remove('open'));
+createModal.addEventListener('click', (e) => { if (e.target === createModal) createModal.classList.remove('open'); });
+
+createInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') createConfirm.click(); });
+
+createConfirm.addEventListener('click', async () => {
+  const partname = createInput.value.trim();
+  if (!partname) { createError.textContent = 'Part name is required.'; return; }
+  createError.textContent = '';
+  createConfirm.disabled = true;
+  try {
+    const resp = await fetch('/api/recipes/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partname }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { createError.textContent = data.detail || `Error ${resp.status}`; return; }
+    createModal.classList.remove('open');
+    setStatus(`Recipe "${data.partname}" created.`, 'ok');
+    await loadRecipes();
+  } catch (e) {
+    createError.textContent = `Failed: ${e}`;
+  } finally {
+    createConfirm.disabled = false;
+  }
+});
+
+
+
 let allRecipes = [];
 let pendingNameAction = null; // { type: 'rename'|'duplicate', file, partname }
 let pendingDeleteFile = null;
@@ -49,18 +93,19 @@ function renderTable(recipes) {
   tbody.innerHTML = recipes.map((r) => `
     <tr data-file="${esc(r.file)}">
       <td>${esc(r.partname)}</td>
-      <td style="color:#6b7a95;font-size:.82rem;">${esc(r.file)}</td>
+      <!--<td style="color:#6b7a95;font-size:.82rem;">${esc(r.file)}</td> -->
       <td><span class="step-badge">${r.steps} step${r.steps !== 1 ? 's' : ''}</span></td>
       <td>
         <div class="rm-actions">
           <button class="primary btn-edit" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Edit</button>
           <button class="secondary btn-preview" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Preview</button>
-          <a class="secondary" href="/api/recipes/${esc(r.file)}/download" download>↓ ZIP</a>
-          <a class="secondary" href="/api/recipes/${esc(r.file)}/pdf" download>↓ PDF</a>
-          <a class="secondary" href="/api/recipes/${esc(r.file)}/wi" download>↓ WI</a>
+         
           <button class="secondary btn-rename" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Rename</button>
           <button class="secondary btn-duplicate" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Duplicate</button>
           <button class="danger btn-delete" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Delete</button>
+        <a class="secondary" href="/api/recipes/${esc(r.file)}/download" download>↓ Recipie (.zip)</a>
+          <a class="secondary" href="/api/recipes/${esc(r.file)}/pdf" download>↓ Step(.pdf)</a>
+          <a class="secondary" href="/api/recipes/${esc(r.file)}/wi" download>↓ Work Instructions(.pdf)</a>
         </div>
       </td>
     </tr>`).join('');

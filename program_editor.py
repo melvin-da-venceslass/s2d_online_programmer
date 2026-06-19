@@ -16,10 +16,14 @@ from urllib.parse import urlparse
 import shutil
 import subprocess
 
+import hashlib
+import secrets
+
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
@@ -31,6 +35,7 @@ from config import settings
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "template.json"
 STATIC_DIR = BASE_DIR / "static"
+LOGIN_FILE = BASE_DIR / "templates" / "login.html"
 INDEX_FILE = BASE_DIR / "templates" / "index.html"
 PREVIEW_FILE = BASE_DIR / "templates" / "preview.html"
 DOWNLOAD_LOGS_FILE = BASE_DIR / "templates" / "download_logs.html"
@@ -38,10 +43,56 @@ CONFIGURE_FILE = BASE_DIR / "templates" / "configure.html"
 SYSTEM_SETTINGS_FILE = BASE_DIR / "templates" / "system_settings.html"
 RECIPE_MANAGEMENT_FILE = BASE_DIR / "templates" / "recipe_management.html"
 PROGRAMS_DIR = Path(settings.programs_dir)
+CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 
 DIRECT_UPLOAD_THRESHOLD_BYTES = 20 * 1024 * 1024
 
+# ── Credentials helpers ────────────────────────────────────────────────────────
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def _load_credentials() -> Dict[str, str]:
+    if CREDENTIALS_FILE.exists():
+        try:
+            return json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # Default credentials
+    creds = {"username": "Admin", "password_hash": _hash_password("admin@1234")}
+    CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+    return creds
+
+def _save_credentials(username: str, password: str) -> None:
+    creds = {"username": username, "password_hash": _hash_password(password)}
+    CREDENTIALS_FILE.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+
+def _verify_credentials(username: str, password: str) -> bool:
+    creds = _load_credentials()
+    return (
+        secrets.compare_digest(username, creds.get("username", "")) and
+        secrets.compare_digest(_hash_password(password), creds.get("password_hash", ""))
+    )
+
+# ── Session auth helper ────────────────────────────────────────────────────────
+
+def _is_authenticated(request: Request) -> bool:
+    return request.session.get("authenticated") is True
+
+def _require_auth(request: Request) -> None:
+    """Raise a redirect if not authenticated."""
+    if not _is_authenticated(request):
+        raise _LoginRedirect()
+
+class _LoginRedirect(Exception):
+    pass
+
+# ── App setup ─────────────────────────────────────────────────────────────────
+
+_SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_hex(32)
+
 app = FastAPI(title=settings.app_name, version="1.0.0", docs_url=None, redoc_url=None)
+app.add_middleware(SessionMiddleware, secret_key=_SESSION_SECRET, session_cookie="pe_session", max_age=86400 * 7)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 PROGRAMS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -777,12 +828,60 @@ def startup() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+def index(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return RedirectResponse(url="/recipe-management")
 
 
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if _is_authenticated(request):
+        return RedirectResponse(url="/recipe-management")
+    return HTMLResponse(content=LOGIN_FILE.read_text(encoding="utf-8"))
+
+
+@app.post("/api/auth/login")
+async def api_login(request: Request):
+    body = await request.json()
+    username = str(body.get("username", "")).strip()
+    password = str(body.get("password", ""))
+    if not _verify_credentials(username, password):
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    request.session["authenticated"] = True
+    return {"redirect": "/recipe-management"}
+
+
+@app.post("/api/auth/logout")
+def api_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.post("/api/auth/change-credentials")
+async def api_change_credentials(request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    body = await request.json()
+    current_password = str(body.get("current_password", ""))
+    new_username = str(body.get("new_username", "")).strip()
+    new_password = str(body.get("new_password", "")).strip()
+    # Verify current password first
+    creds = _load_credentials()
+    if not secrets.compare_digest(_hash_password(current_password), creds.get("password_hash", "")):
+        raise HTTPException(status_code=403, detail="Current password is incorrect.")
+    if not new_username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty.")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters.")
+    _save_credentials(new_username, new_password)
+    return {"status": "ok"}
+
+
 @app.get("/editor", response_class=HTMLResponse)
-def editor_page():
+def editor_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = html.replace("{{ initial_program | safe }}", json.dumps(get_state()))
     html = html.replace("{{ initial_step_template | safe }}", json.dumps(STEP_TEMPLATE))
@@ -790,7 +889,9 @@ def editor_page():
 
 
 @app.get("/preview", response_class=HTMLResponse)
-def preview_page():
+def preview_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return HTMLResponse(content=PREVIEW_FILE.read_text(encoding="utf-8"))
 
 
@@ -1005,7 +1106,9 @@ def api_template():
 # ── System Settings ───────────────────────────────────────────────────────────
 
 @app.get("/system-settings", response_class=HTMLResponse)
-def system_settings_page():
+def system_settings_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return HTMLResponse(content=SYSTEM_SETTINGS_FILE.read_text(encoding="utf-8"))
 
 
@@ -1056,7 +1159,9 @@ async def api_set_datetime(request: Request):
 # ── Recipe Management ─────────────────────────────────────────────────────────
 
 @app.get("/recipe-management", response_class=HTMLResponse)
-def recipe_management_page():
+def recipe_management_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return HTMLResponse(content=RECIPE_MANAGEMENT_FILE.read_text(encoding="utf-8"))
 
 
@@ -1074,6 +1179,35 @@ def api_list_recipes():
         except Exception:
             recipes.append({"file": fp.name, "partname": fp.stem, "steps": 0})
     return {"recipes": recipes}
+
+
+@app.post("/api/recipes/new")
+async def api_create_recipe(request: Request):
+    body = await request.json()
+    partname = str(body.get("partname", "")).strip()
+    if not partname:
+        raise HTTPException(status_code=400, detail="partname is required.")
+    safe_stem = sanitize_filename(partname)
+    if not safe_stem:
+        raise HTTPException(status_code=400, detail="Invalid partname.")
+    json_path = PROGRAMS_DIR / f"{safe_stem}.json"
+    if json_path.exists():
+        raise HTTPException(status_code=409, detail="A recipe with that name already exists.")
+    # Load template and set partname
+    template_path = Path("template.json")
+    if template_path.exists():
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+    else:
+        template = {"partname": "", "enable_mes": False, "enable_ftp": False, "steps": []}
+    template["partname"] = partname
+    # Assign step_no = 1 to the first template step if present
+    if template.get("steps"):
+        template["steps"][0]["step_no"] = 1
+    # Create folder structure
+    img_dir = PROGRAMS_DIR / safe_stem / "imgs"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(template, indent=4), encoding="utf-8")
+    return {"file": json_path.name, "partname": partname, "steps": len(template.get("steps", []))}
 
 
 def _safe_program_path(filename: str) -> Path:
@@ -1238,7 +1372,9 @@ def api_download_recipe_wi(filename: str):
 # ── Download Logs ─────────────────────────────────────────────────────────────
 
 @app.get("/download-logs", response_class=HTMLResponse)
-def download_logs_page():
+def download_logs_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return HTMLResponse(content=DOWNLOAD_LOGS_FILE.read_text(encoding="utf-8"))
 
 
@@ -1381,7 +1517,9 @@ def api_download_logs(
 # ── App Configuration ─────────────────────────────────────────────────────────
 
 @app.get("/configure", response_class=HTMLResponse)
-def configure_page():
+def configure_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return HTMLResponse(content=CONFIGURE_FILE.read_text(encoding="utf-8"))
 
 
@@ -1414,7 +1552,9 @@ async def api_set_mes_config(request: Request):
 
 
 @app.get("/{full_path:path}")
-def catch_all(full_path: str):
+def catch_all(full_path: str, request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
     return RedirectResponse(url="/recipe-management")
 
 
