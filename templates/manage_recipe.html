@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manage Recipie</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/manage_recipe.css" />
+</head>
+<body>
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
+    </div>
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link" href="/" id="nav-home">Home</a></li>
+      <li><a class="app-nav-link is-active" href="/manage-recipe" id="nav-manage-recipe">Recipies Records</a></li>
+      <li><a class="app-nav-link" href="/cook-recipie" id="nav-editor">Cook Recipie</a></li>
+      <li><a class="app-nav-link" href="/admin" id="nav-admin">Administration</a></li>
+    </ul>
+    <div class="app-nav-user">
+      <span id="session-info" class="nav-user-label">Loading...</span>
+      <button id="logout-btn" class="secondary" type="button">Sign out</button>
+    </div>
+  </nav>
+
+  <main class="manage-layout">
+    <section class="card manage-card">
+      <h2>Recipies Records</h2>
+      <div class="manage-tab-bar">
+        <button class="manage-tab-btn is-active" type="button" data-target="program-actions-section">Program Actions</button>
+        <button class="manage-tab-btn" type="button" data-target="new-recipe-section">New Recipie</button>
+        <button class="manage-tab-btn" type="button" data-target="edit-recipe-section">Edit Recipie</button>
+        <button class="manage-tab-btn" type="button" data-target="recipe-mappings-section">Recipie Mappings</button>
+        <button class="manage-tab-btn" type="button" data-target="recipe-dashboard-section">Pool Dashboard</button>
+      </div>
+    </section>
+
+    <section id="program-actions-section" class="card manage-card manage-tab-section is-active">
+      <h2>Program Actions</h2>
+      <p class="manage-help">These actions were moved from the editor navigation bar.</p>
+      <div class="manage-actions-row">
+        <button id="save-program-btn" class="primary" type="button">Save Program</button>
+        <button id="download-json-btn" class="secondary" type="button">Download JSON</button>
+        <button id="download-current-recipe-btn" class="secondary" type="button">Download Recipe ZIP</button>
+      </div>
+      <p id="program-actions-status" class="recipe-status"></p>
+    </section>
+
+    <section id="new-recipe-section" class="card manage-card manage-tab-section" data-tab-group="new-recipe-section">
+      <h2>New Recipie</h2>
+      <div class="manage-grid two-col">
+        <label>Organization
+          <select id="create-org-select"><option value="">-- Organization --</option></select>
+        </label>
+        <label>Branch
+          <select id="create-branch-select"><option value="">-- Branch --</option></select>
+        </label>
+        <label>Project
+          <select id="create-project-select"><option value="">-- Project --</option></select>
+        </label>
+        <label>Line
+          <select id="create-line-select"><option value="">-- Line --</option></select>
+        </label>
+        <label>Station
+          <select id="create-station-select"><option value="">-- Station --</option></select>
+        </label>
+      </div>
+      <div class="manage-grid two-col">
+        <label>Recipie Name
+          <input id="create-recipe-name" type="text" placeholder="Enter recipie name" />
+        </label>
+        <label>Description
+          <input id="create-recipe-description" type="text" placeholder="Optional description" />
+        </label>
+      </div>
+      <div class="manage-actions-row">
+        <button id="create-recipe-btn" class="primary" type="button">Create Recipie</button>
+        <button id="create-open-editor-btn" class="secondary" type="button">Create + Open Editor</button>
+      </div>
+      <p id="create-recipe-status" class="recipe-status"></p>
+    </section>
+
+    <section id="edit-recipe-section" class="card manage-card manage-tab-section" data-tab-group="edit-recipe-section">
+      <h2>Edit Recipie</h2>
+      <div class="manage-grid two-col">
+        <label>Organization
+          <select id="load-org-select"><option value="">-- Organization --</option></select>
+        </label>
+        <label>Branch
+          <select id="load-branch-select"><option value="">-- Branch --</option></select>
+        </label>
+        <label>Project
+          <select id="load-project-select"><option value="">-- Project --</option></select>
+        </label>
+        <label>Line
+          <select id="load-line-select"><option value="">-- Line --</option></select>
+        </label>
+        <label>Station
+          <select id="load-station-select"><option value="">-- Station --</option></select>
+        </label>
+        <label>Mapped Device
+          <select id="load-device-select"><option value="">-- Optional Device Filter --</option></select>
+        </label>
+        <label>Recipie
+          <select id="load-recipe-select"><option value="">-- Select Recipie --</option></select>
+        </label>
+      </div>
+      <p class="manage-help">Select a mapped device to list only recipies assigned to that device.</p>
+      <div class="manage-actions-row">
+        <button id="open-editor-btn" class="primary" type="button">Open In Editor</button>
+        <button id="download-selected-zip-btn" class="secondary" type="button">Download Selected ZIP</button>
+        <button id="delete-selected-recipe-btn" class="danger" type="button">Delete Selected Recipie</button>
+      </div>
+      <p id="load-recipe-status" class="recipe-status"></p>
+    </section>
+
+    <section class="card manage-card manage-tab-section" id="upload-recipe-subsection" data-tab-group="new-recipe-section">
+      <h2>Upload Recipie ZIP</h2>
+      <div class="manage-actions-row">
+        <input id="upload-zip-file" type="file" accept=".zip,application/zip" />
+        <button id="upload-zip-btn" class="primary" type="button">Upload ZIP</button>
+      </div>
+      <p id="upload-recipe-status" class="recipe-status"></p>
+    </section>
+
+    <section id="recipe-mappings-section" class="card manage-card manage-tab-section" data-tab-group="recipe-mappings-section">
+      <h2>Recipie Mappings</h2>
+      <div class="manage-grid two-col">
+        <label>Organization
+          <select id="map-org-select"><option value="">-- Organization --</option></select>
+        </label>
+        <label>Branch
+          <select id="map-branch-select"><option value="">-- Branch --</option></select>
+        </label>
+        <label>Project
+          <select id="map-project-select"><option value="">-- Project --</option></select>
+        </label>
+        <label>Line
+          <select id="map-line-select"><option value="">-- Line --</option></select>
+        </label>
+        <label>Station
+          <select id="map-station-select"><option value="">-- Station --</option></select>
+        </label>
+        <label>Device
+          <select id="map-device-select"><option value="">-- Select Device --</option></select>
+        </label>
+        <label>Map Target Type
+          <select id="map-target-type-select">
+            <option value="">-- Select Target Type --</option>
+            <option value="project">Project</option>
+            <option value="line">Line</option>
+            <option value="station">Station</option>
+          </select>
+        </label>
+        <label>Map Target
+          <select id="map-target-id-select"><option value="">-- Select Target --</option></select>
+        </label>
+        <label>Recipie
+          <select id="map-recipe-select"><option value="">-- Select Recipie --</option></select>
+        </label>
+      </div>
+      <div class="manage-actions-row">
+        <button id="map-device-btn" class="primary" type="button">Map Recipie To Device</button>
+        <button id="map-scope-btn" class="secondary" type="button">Map Recipie To Scope</button>
+      </div>
+      <p id="map-status" class="recipe-status"></p>
+    </section>
+
+    <section id="recipe-dashboard-section" class="card manage-card manage-tab-section" data-tab-group="recipe-dashboard-section">
+      <h2>Recipie Pool Dashboard</h2>
+      <div class="manage-grid two-col">
+        <label>Organization
+          <select id="dash-org-select"><option value="">-- Organization --</option></select>
+        </label>
+        <label>Branch
+          <select id="dash-branch-select"><option value="">-- Branch --</option></select>
+        </label>
+        <label>Project
+          <select id="dash-project-select"><option value="">-- Project --</option></select>
+        </label>
+        <label>Line
+          <select id="dash-line-select"><option value="">-- Line --</option></select>
+        </label>
+        <label>Station
+          <select id="dash-station-select"><option value="">-- Station --</option></select>
+        </label>
+        <label>Device
+          <select id="dash-device-select"><option value="">-- Device --</option></select>
+        </label>
+        <label>Search
+          <input id="dash-search-input" type="text" placeholder="Search by recipie name/description" />
+        </label>
+        <label>Pool Filter
+          <select id="dash-unmapped-select">
+            <option value="false">All Recipies</option>
+            <option value="true">Only Unmapped Pool</option>
+          </select>
+        </label>
+      </div>
+      <div class="manage-actions-row">
+        <button id="dash-refresh-btn" class="primary" type="button">Refresh Dashboard</button>
+      </div>
+      <p id="dash-status" class="recipe-status"></p>
+      <div id="dash-summary" class="manage-help"></div>
+      <div class="manage-dashboard-grid">
+        <div>
+          <h3>Recipie Pool</h3>
+          <div id="dash-recipes-list" class="manage-list-box"></div>
+        </div>
+        <div>
+          <h3>Scope Mappings</h3>
+          <div id="dash-scope-list" class="manage-list-box"></div>
+        </div>
+        <div>
+          <h3>Device Mappings</h3>
+          <div id="dash-device-list" class="manage-list-box"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/manage_recipe.js"></script>
+</body>
+</html>

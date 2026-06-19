@@ -22,6 +22,8 @@ class AdminRepository:
             "devices": [],
             "recipes": [],
             "recipe_device_maps": [],
+            "recipe_scope_maps": [],
+            "audit_logs": [],
         }
 
         if self._mongo_enabled:
@@ -51,6 +53,17 @@ class AdminRepository:
         self._db.lines.create_index([("project_id", 1), ("code", 1)], unique=True)
         self._db.stations.create_index([("line_id", 1), ("code", 1)], unique=True)
         self._db.devices.create_index([("station_id", 1), ("device_code", 1)], unique=True)
+        self._db.recipes.create_index([("organization_id", 1), ("branch_id", 1), ("name", 1)], unique=True)
+        self._db.recipe_device_maps.create_index(
+            [("recipe_id", 1), ("device_id", 1)],
+            unique=True,
+        )
+        self._db.recipe_scope_maps.create_index(
+            [("recipe_id", 1), ("target_type", 1), ("target_id", 1)],
+            unique=True,
+        )
+        self._db.audit_logs.create_index([("timestamp", -1)])
+        self._db.audit_logs.create_index([("actor_id", 1)])
 
     def _strip_id(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         out = copy.deepcopy(doc)
@@ -108,6 +121,17 @@ class AdminRepository:
             return self._find_one(collection, filters)
         return self._mem_update_one(collection, filters, patch)
 
+    def _delete_many(self, collection: str, filters: Dict[str, Any]) -> int:
+        if self.mongo_enabled:
+            result = self._db[collection].delete_many(filters)
+            return int(result.deleted_count)
+        before = len(self._mem[collection])
+        self._mem[collection] = [
+            item for item in self._mem[collection]
+            if not all(item.get(k) == v for k, v in filters.items())
+        ]
+        return before - len(self._mem[collection])
+
     # User methods
     def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         return self._find_one("users", {"username": username})
@@ -147,9 +171,6 @@ class AdminRepository:
                 "name": doc["name"],
                 "organization_id": doc["organization_id"],
                 "branch_id": doc.get("branch_id"),
-                "project_id": doc.get("project_id"),
-                "line_id": doc.get("line_id"),
-                "station_id": doc.get("station_id"),
             },
         )
         if existing:
@@ -177,10 +198,21 @@ class AdminRepository:
     def list_recipes(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         return self._find_many("recipes", filters)
 
+    def get_recipe(self, recipe_id: str) -> Optional[Dict[str, Any]]:
+        return self._find_one("recipes", {"recipe_id": recipe_id})
+
+    def delete_recipe(self, recipe_id: str) -> bool:
+        return self._delete_many("recipes", {"recipe_id": recipe_id}) > 0
+
+    def delete_recipe_device_maps(self, recipe_id: str) -> int:
+        return self._delete_many("recipe_device_maps", {"recipe_id": recipe_id})
+
+    def delete_recipe_scope_maps(self, recipe_id: str) -> int:
+        return self._delete_many("recipe_scope_maps", {"recipe_id": recipe_id})
+
     def create_recipe_device_map(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         existing = self._find_one("recipe_device_maps", {
-            "recipe_name": doc["recipe_name"],
-            "organization_id": doc["organization_id"],
+            "recipe_id": doc["recipe_id"],
             "device_id": doc["device_id"],
         })
         if existing:
@@ -189,6 +221,19 @@ class AdminRepository:
 
     def list_recipe_device_maps(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         return self._find_many("recipe_device_maps", filters)
+
+    def create_recipe_scope_map(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        existing = self._find_one("recipe_scope_maps", {
+            "recipe_id": doc["recipe_id"],
+            "target_type": doc["target_type"],
+            "target_id": doc["target_id"],
+        })
+        if existing:
+            return self._update_one("recipe_scope_maps", {"map_id": existing["map_id"]}, doc) or doc
+        return self._insert_one("recipe_scope_maps", doc)
+
+    def list_recipe_scope_maps(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        return self._find_many("recipe_scope_maps", filters)
 
     def get_organization(self, organization_id: str) -> Optional[Dict[str, Any]]:
         return self._find_one("organizations", {"organization_id": organization_id})
@@ -229,3 +274,14 @@ class AdminRepository:
 
     def update_user(self, user_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._update_one("users", {"user_id": user_id}, patch)
+
+    def create_audit_log(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        return self._insert_one("audit_logs", doc)
+
+    def list_audit_logs(self, filters: Optional[Dict[str, Any]] = None, limit: int = 200) -> List[Dict[str, Any]]:
+        if self.mongo_enabled:
+            cursor = self._db.audit_logs.find(filters or {}).sort("timestamp", -1).limit(max(1, limit))
+            return [self._strip_id(doc) for doc in cursor]
+        rows = self._mem_find_many("audit_logs", filters)
+        rows.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+        return rows[: max(1, limit)]

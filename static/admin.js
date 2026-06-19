@@ -447,10 +447,26 @@ function authCard(title, buttonLabel, onSubmit) {
   form.className = 'login-card';
   form.innerHTML = `
     <h3>${title}</h3>
-    <input name="username" placeholder="Username" required />
-    <input name="password" placeholder="Password" type="password" required />
+    <label class="field-label">Username
+      <input name="username" placeholder="Username" autocomplete="username" required />
+    </label>
+    <label class="field-label">Password
+      <div class="password-field">
+        <input name="password" placeholder="Password" type="password" autocomplete="current-password" required />
+        <button type="button" class="btn ghost password-toggle" aria-label="Show password">Show</button>
+      </div>
+    </label>
+    <label class="remember-me"><input name="remember" type="checkbox" /> Remember me</label>
     <button class="btn primary" type="submit">${buttonLabel}</button>
   `;
+  const passwordInput = form.querySelector('input[name="password"]');
+  const toggleBtn = form.querySelector('.password-toggle');
+  toggleBtn?.addEventListener('click', () => {
+    const show = passwordInput.type === 'password';
+    passwordInput.type = show ? 'text' : 'password';
+    toggleBtn.textContent = show ? 'Hide' : 'Show';
+    toggleBtn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  });
   form.addEventListener('submit', onSubmit);
   return form;
 }

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Home</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/home.css" />
+</head>
+<body class="home-body">
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
+    </div>
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link is-active" href="/" id="nav-home">Home</a></li>
+      <li><a class="app-nav-link" href="/manage-recipe" id="nav-manage-recipe">Recipies Records</a></li>
+      <li><a class="app-nav-link" href="/cook-recipie" id="nav-editor">Cook Recipie</a></li>
+      <li><a class="app-nav-link" href="/admin" id="nav-admin">Administration</a></li>
+    </ul>
+    <div class="app-nav-user">
+      <span id="session-info" class="nav-user-label">Guest</span>
+      <button id="logout-btn" class="secondary" type="button" hidden>Sign out</button>
+    </div>
+  </nav>
+
+  <main class="home-layout">
+    <section class="home-hero card">
+      <div class="home-copy">
+        <p class="home-kicker">Digital Workstation Recipe Control</p>
+        <h1>Welcome to the recipe and device orchestration workspace</h1>
+        <p class="home-subtitle">Create, upload, map, and cook recipies with one controlled flow across organization, line, station, and device context.</p>
+        <div id="welcome-actions" class="home-actions" hidden>
+          <a class="primary home-link-btn" href="/manage-recipe">Open Recipies Records</a>
+          <a class="secondary home-link-btn" href="/cook-recipie">Open Cook Recipie</a>
+        </div>
+      </div>
+      <div class="home-visual">
+        <img src="/static/solution-hero.svg" alt="Illustration of recipe management, device mapping, and production workflow" />
+      </div>
+    </section>
+
+    <section id="auth-panel" class="home-auth">
+      <div class="home-auth-head">
+        <p class="home-kicker">Account Access</p>
+        <h2>Sign in to continue</h2>
+        <p class="home-auth-note">Use your role-based account to access recipie records, cooking, and administration tools.</p>
+      </div>
+      <div id="bootstrap-wrap" class="home-stack"></div>
+      <div id="login-wrap" class="home-stack"></div>
+      <p id="auth-status" class="recipe-status"></p>
+    </section>
+
+    <section id="welcome-panel" class="home-welcome" hidden>
+      <p class="home-kicker">Welcome Screen</p>
+      <h2 id="welcome-title">Welcome</h2>
+      <p id="welcome-message" class="home-auth-note"></p>
+      <div class="home-feature-grid">
+        <article class="home-feature-card">
+          <div class="home-feature-icon">📋</div>
+          <h3>Recipies Records</h3>
+          <p>Create or upload new recipies, edit existing records, review the branch pool, and manage device mappings.</p>
+        </article>
+        <article class="home-feature-card">
+          <div class="home-feature-icon">🍳</div>
+          <h3>Cook Recipie</h3>
+          <p>Load a recipie into the editor, update steps, images, and instruction data, then save the cooked recipie.</p>
+        </article>
+        <article id="admin-feature" class="home-feature-card">
+          <div class="home-feature-icon">⚙️</div>
+          <h3>Administration</h3>
+          <p>Build the organization hierarchy and maintain org, branch, project, line, station, user, and device records.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/home.js"></script>
+</body>
+</html>

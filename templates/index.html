@@ -19,17 +19,11 @@
       </div>
     </div>
     <ul class="app-nav-links">
-      <li><a class="app-nav-link is-active" href="/" id="nav-editor">Editor</a></li>
-      <li><a class="app-nav-link" href="/admin" id="nav-admin">Admin Console</a></li>
-      <li><a class="app-nav-link" href="/preview" id="nav-preview">Preview</a></li>
+      <li><a class="app-nav-link" href="/" id="nav-home">Home</a></li>
+      <li><a class="app-nav-link" href="/manage-recipe" id="nav-manage-recipe">Recipies Records</a></li>
+      <li><a class="app-nav-link is-active" href="/cook-recipie" id="nav-editor">Cook Recipie</a></li>
+      <li><a class="app-nav-link" href="/admin" id="nav-admin">Administration</a></li>
     </ul>
-    <div class="app-nav-toolbar">
-      <a id="download-btn" class="secondary" href="/download">↓ JSON</a>
-      <a id="download-recipe-btn" class="secondary" href="/download-recipe">↓ Recipe</a>
-      <button id="download-pdf-btn" class="secondary" hidden style="display:none;">↓ PDF</button>
-      <button id="download-wi-btn" class="secondary" style="display:none;" hidden>↓ WI</button>
-      <button id="save-program-btn" class="primary">Save Program</button>
-    </div>
     <div class="app-nav-user">
       <span id="session-info" class="nav-user-label">Loading...</span>
       <button id="logout-btn" class="secondary" type="button">Sign out</button>
@@ -139,6 +133,10 @@
           <div class="inline-actions">
             <button id="delete-step-btn" class="danger">Delete Step</button>
             <button id="clone-step-btn" class="secondary">Duplicate</button>
+          </div>
+          <div class="inline-actions">
+            <button id="move-step-up-btn" class="secondary">Move Up</button>
+            <button id="move-step-down-btn" class="secondary">Move Down</button>
           </div>
         </div>
         <label for="upload-file">Upload Json file</label>

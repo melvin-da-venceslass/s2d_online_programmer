@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import logging
 import mimetypes
 import json
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64
@@ -36,7 +38,9 @@ from schemas.admin_schemas import (
     OrganizationCreate,
     ProjectCreate,
     RecipeCreate,
+    RecipeDashboardFilters,
     RecipeDeviceMap,
+    RecipeScopeMapCreate,
     StationCreate,
     StorageContextSet,
     UserCreate,
@@ -50,6 +54,8 @@ STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = BASE_DIR / "templates" / "index.html"
 PREVIEW_FILE = BASE_DIR / "templates" / "preview.html"
 ADMIN_FILE = BASE_DIR / "templates" / "admin.html"
+MANAGE_RECIPE_FILE = BASE_DIR / "templates" / "manage_recipe.html"
+HOME_FILE = BASE_DIR / "templates" / "home.html"
 PROGRAMS_DIR = BASE_DIR / "programs"
 
 GCS_BUCKET_NAME = settings.gcs_bucket_name
@@ -73,43 +79,44 @@ admin_repository = AdminRepository(settings.mongodb_uri, settings.mongodb_db_nam
 admin_service = AdminService(admin_repository, settings.admin_session_timeout_minutes)
 
 ADMIN_TOKEN_COOKIE = "admin_token"
+logger = logging.getLogger(__name__)
 
 STEP_TEMPLATE: Dict[str, Any] = {
-    "upload_image": "",
+    "upload_image": "...",
     "enable_barcode": False,
-    "bc_title": "",
+    "bc_title": "...",
     "bc_parent": False,
-    "bc_child": True,
+    "bc_child": False,
     "whatloc_enabled": False,
-    "check_short_workstation": "",
-    "check_part_number": "",
-    "check_ref_designator": "",
+    "check_short_workstation": "...",
+    "check_part_number": "...",
+    "check_ref_designator": "...",
     "enable_barcode_mes": False,
-    "ack_title": "",
+    "ack_title": "...",
     "request_ack": False,
     "enable_ack_mes": False,
     "enable_fastening": False,
     "step_no": 1,
-    "target_preset": "",
-    "target_torque": "",
-    "target_angle": "",
-    "target_min_angle": "",
-    "target_max_angle": "",
-    "target_tolerance": "",
-    "target_rpm": "",
-    "TC_AM": True,
+    "target_preset": "...",
+    "target_torque": "...",
+    "target_angle": "...",
+    "target_min_angle": "...",
+    "target_max_angle": "...",
+    "target_tolerance": "...",
+    "target_rpm": "...",
+    "TC_AM": False,
     "AC_TM": False,
-    "screw_info": "",
-    "remarks": "",
+    "screw_info": "...",
+    "remarks": "...",
     "mes_enable_assy": False,
-    "snug_torque": "",
-    "free_fastening_angle": "",
-    "soft_start": "",
-    "free_fastening_speed": "",
-    "torque_rising_rate": "",
-    "seating_point": "",
-    "ramp_up_speed": "",
-    "torque_compensation": "",
+    "snug_torque": "...",
+    "free_fastening_angle": "...",
+    "soft_start": "...",
+    "free_fastening_speed": "...",
+    "torque_rising_rate": "...",
+    "seating_point": "...",
+    "ramp_up_speed": "...",
+    "torque_compensation": "...",
 }
 
 
@@ -230,7 +237,10 @@ def read_program_asset_bytes(relative_path: str) -> Optional[bytes]:
         return None
 
     if gcs_enabled():
-        return download_bytes_from_gcs(rel)
+        direct_bytes = download_bytes_from_gcs(rel)
+        if direct_bytes is not None:
+            return direct_bytes
+        return download_bytes_from_gcs(f"programs/{rel}")
 
     local_path = (BASE_DIR / rel).resolve()
     if local_path.exists() and local_path.is_file() and str(local_path).startswith(str(BASE_DIR.resolve())):
@@ -310,16 +320,45 @@ def normalize_program(program: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+def validate_program(program: Dict[str, Any]) -> None:
+    steps = program.get("steps") or []
+    if not steps:
+        raise HTTPException(status_code=400, detail="Recipe must contain at least one step")
+
+    for index, step in enumerate(steps, start=1):
+        step_no = int(step.get("step_no", index) or index)
+        if step_no == 1:
+            if not step.get("enable_barcode"):
+                raise HTTPException(status_code=400, detail="Step 1 must be Barcode mode")
+            if not step.get("bc_parent"):
+                raise HTTPException(status_code=400, detail="Step 1 must be parent barcode")
+            if step.get("bc_child"):
+                raise HTTPException(status_code=400, detail="Step 1 cannot be child barcode")
+        elif step.get("bc_parent"):
+            raise HTTPException(status_code=400, detail=f"Only step 1 can be parent barcode (step {step_no})")
+
+        if step.get("bc_parent") and step.get("bc_child"):
+            raise HTTPException(status_code=400, detail=f"Step {step_no}: parent and child barcode are mutually exclusive")
+        if step.get("bc_parent") and step.get("enable_barcode_mes"):
+            raise HTTPException(status_code=400, detail=f"Step {step_no}: parent barcode cannot enable barcode MES")
+
+        if step.get("enable_barcode"):
+            step["remarks"] = step.get("bc_title", "")
+        elif step.get("request_ack"):
+            step["remarks"] = step.get("ack_title", "")
+
+
 def normalize_step(step: Dict[str, Any], step_no: int) -> Dict[str, Any]:
     normalized = copy.deepcopy(STEP_TEMPLATE)
     if isinstance(step, dict):
         normalized.update(step)
-    normalized["step_no"] = int(step.get("step_no", step_no)) if isinstance(step, dict) else step_no
+    normalized["step_no"] = int(step_no)
     for key, value in normalized.items():
         if isinstance(STEP_TEMPLATE.get(key), bool):
             normalized[key] = bool(value)
         elif isinstance(STEP_TEMPLATE.get(key), str):
-            normalized[key] = "" if value is None else str(value)
+            string_value = "" if value is None else str(value)
+            normalized[key] = string_value if string_value.strip() else "..."
 
     # Keep the three mode flags mutually exclusive.
     if normalized["enable_barcode"]:
@@ -332,13 +371,20 @@ def normalize_step(step: Dict[str, Any], step_no: int) -> Dict[str, Any]:
         normalized["enable_barcode"] = False
         normalized["request_ack"] = False
 
-    # Validation rule: step 1 is BC Parent, all following steps are BC Child.
+    # Validation rule: step 1 is always Barcode + BC Parent.
     if normalized["step_no"] == 1:
+        normalized["enable_barcode"] = True
+        normalized["request_ack"] = False
+        normalized["enable_fastening"] = False
         normalized["bc_parent"] = True
         normalized["bc_child"] = False
-    else:
+    elif normalized["bc_parent"]:
+        normalized["bc_child"] = False
+    elif normalized["bc_child"]:
         normalized["bc_parent"] = False
-        normalized["bc_child"] = True
+
+    if normalized["bc_parent"]:
+        normalized["enable_barcode_mes"] = False
 
     # Set remarks based on mode
     if normalized["enable_barcode"]:
@@ -419,6 +465,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     allow_unauthenticated_paths = {
+        "/",
         "/admin",
         "/api/admin/bootstrap-state",
         "/api/admin/bootstrap",
@@ -981,8 +1028,38 @@ def get_state() -> Dict[str, Any]:
         return copy.deepcopy(CURRENT_DATA)
 
 
+def delete_recipe_assets(recipe: Dict[str, Any]) -> None:
+    payload = recipe.get("payload") if isinstance(recipe.get("payload"), dict) else {}
+    part = sanitize_filename(recipe.get("name") or payload.get("partname") or "program", fallback="program")
+
+    prefixes: List[str] = [f"programs/{part}/"]
+    scoped_prefix = build_storage_context_prefix(payload)
+    if scoped_prefix:
+        prefixes.append(f"{scoped_prefix}/{part}/")
+
+    if gcs_enabled():
+        bucket = get_gcs_bucket()
+        if bucket is not None:
+            for prefix in prefixes:
+                blob_prefix = gcs_blob_name(prefix)
+                for blob in bucket.list_blobs(prefix=blob_prefix):
+                    try:
+                        blob.delete()
+                        logger.info("Deleted GCS object %s", blob.name)
+                    except Exception as exc:
+                        logger.warning("Failed to delete GCS object %s: %s", blob.name, exc)
+
+    json_path = PROGRAMS_DIR / f"{part}.json"
+    if json_path.exists():
+        json_path.unlink()
+    part_dir = PROGRAMS_DIR / part
+    if part_dir.exists() and part_dir.is_dir():
+        shutil.rmtree(part_dir, ignore_errors=True)
+
+
 def set_state(data: Dict[str, Any], persist: bool = True) -> Dict[str, Any]:
     normalized = normalize_program(data)
+    validate_program(normalized)
     with STATE_LOCK:
         CURRENT_STORAGE_CONTEXT.clear()
         if isinstance(normalized.get("storage_context"), dict):
@@ -1012,6 +1089,27 @@ def insert_step_after(index: int, step_data: Optional[Dict[str, Any]] = None) ->
         new_step = normalize_step(step_data or STEP_TEMPLATE, index + 2)
         steps.insert(index + 1, new_step)
         renumber_steps(steps)
+        persist_program_locked()
+        return copy.deepcopy(CURRENT_DATA)
+
+
+def move_step(index: int, direction: int) -> Dict[str, Any]:
+    with STATE_LOCK:
+        steps = CURRENT_DATA["steps"]
+        target = index + direction
+        if index < 0 or index >= len(steps) or target < 0 or target >= len(steps):
+            raise HTTPException(status_code=404, detail="Step not found")
+
+        steps[index], steps[target] = steps[target], steps[index]
+        renumber_steps(steps)
+
+        # Capture image bytes before persisting so step image content follows reordered steps.
+        for step in steps:
+            image_bytes = resolve_step_image_bytes(CURRENT_DATA, step)
+            if image_bytes is None:
+                continue
+            step["upload_image"] = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+
         persist_program_locked()
         return copy.deepcopy(CURRENT_DATA)
 
@@ -1050,11 +1148,16 @@ def startup() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
+def home_page():
+    return HTMLResponse(content=HOME_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/cook-recipie", response_class=HTMLResponse)
 def index(request: Request):
     try:
         require_authenticated_request(request)
     except HTTPException:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
 
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = html.replace("{{ initial_program | safe }}", json.dumps(get_state()))
@@ -1067,8 +1170,17 @@ def preview_page(request: Request):
     try:
         require_authenticated_request(request)
     except HTTPException:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/", status_code=303)
     return HTMLResponse(content=PREVIEW_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/manage-recipe", response_class=HTMLResponse)
+def manage_recipe_page(request: Request):
+    try:
+        require_authenticated_request(request)
+    except HTTPException:
+        return RedirectResponse(url="/", status_code=303)
+    return HTMLResponse(content=MANAGE_RECIPE_FILE.read_text(encoding="utf-8"))
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -1145,15 +1257,55 @@ def api_admin_me(request: Request, x_admin_token: Optional[str] = Header(default
 @app.get("/api/admin/tree")
 def api_admin_tree(request: Request, x_admin_token: Optional[str] = Header(default=None)):
     user = get_current_admin_user(request, x_admin_token)
-    if str(user.get("role")) == "engineer":
-        raise HTTPException(status_code=403, detail="Engineer cannot access admin console data")
     return admin_service.tree_view(user)
 
 
 @app.get("/api/editor/recipes")
-def api_editor_list_recipes(request: Request, x_admin_token: Optional[str] = Header(default=None)):
+def api_editor_list_recipes(
+    request: Request,
+    branch_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    line_id: Optional[str] = None,
+    station_id: Optional[str] = None,
+    unmapped_only: bool = False,
+    x_admin_token: Optional[str] = Header(default=None),
+):
     actor = get_current_admin_user(request, x_admin_token)
-    return {"recipes": admin_service.list_recipes_for_actor(actor)}
+    return {
+        "recipes": admin_service.list_recipes_for_actor(
+            actor,
+            {
+                "branch_id": branch_id,
+                "project_id": project_id,
+                "line_id": line_id,
+                "station_id": station_id,
+                "unmapped_only": unmapped_only,
+            },
+        )
+    }
+
+
+@app.delete("/api/editor/recipes/{recipe_id}")
+def api_editor_delete_recipe(
+    recipe_id: str,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    actor = get_current_admin_user(request, x_admin_token)
+    deleted_recipe = admin_service.delete_recipe(actor, recipe_id)
+    delete_recipe_assets(deleted_recipe)
+    return {"deleted": True, "recipe_id": recipe_id, "name": deleted_recipe.get("name")}
+
+
+@app.get("/api/admin/audit-logs")
+def api_admin_audit_logs(
+    request: Request,
+    q: Optional[str] = None,
+    limit: int = 200,
+    x_admin_token: Optional[str] = Header(default=None),
+):
+    actor = get_current_admin_user(request, x_admin_token)
+    return {"logs": admin_service.list_audit_logs(actor, q=q, limit=limit)}
 
 
 @app.post("/api/editor/recipes/upsert")
@@ -1268,6 +1420,18 @@ def api_admin_recipe_device_map(payload: RecipeDeviceMap, request: Request, x_ad
     return admin_service.map_recipe_to_device(actor, payload.model_dump())
 
 
+@app.post("/api/admin/recipe-scope-map")
+def api_admin_recipe_scope_map(payload: RecipeScopeMapCreate, request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    actor = get_current_admin_user(request, x_admin_token)
+    return admin_service.map_recipe_to_scope(actor, payload.model_dump())
+
+
+@app.post("/api/admin/recipes/dashboard")
+def api_admin_recipe_dashboard(payload: RecipeDashboardFilters, request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    actor = get_current_admin_user(request, x_admin_token)
+    return admin_service.recipe_dashboard(actor, payload.model_dump())
+
+
 @app.get("/list-recipes/{device_id}")
 def api_list_recipes_for_device(device_id: str):
     """Return all recipes mapped to a device. Called by device clients — no user auth required."""
@@ -1275,8 +1439,9 @@ def api_list_recipes_for_device(device_id: str):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
     maps = admin_service.repo.list_recipe_device_maps({"device_id": device_id})
-    mapped_names = {m["recipe_name"] for m in maps}
-    if not mapped_names:
+    mapped_recipe_ids = {m.get("recipe_id") for m in maps if m.get("recipe_id")}
+    mapped_names = {m.get("recipe_name") for m in maps if m.get("recipe_name")}
+    if not mapped_recipe_ids and not mapped_names:
         return {"device_id": device_id, "recipes": []}
     all_recipes = admin_service.repo.list_recipes()
     recipes = [
@@ -1287,7 +1452,7 @@ def api_list_recipes_for_device(device_id: str):
             "updated_at": r.get("updated_at", ""),
         }
         for r in all_recipes
-        if r["name"] in mapped_names
+        if r.get("recipe_id") in mapped_recipe_ids or r.get("name") in mapped_names
     ]
     return {"device_id": device_id, "recipes": recipes}
 
@@ -1318,6 +1483,46 @@ async def api_download_recipe(device_id: str, part_name: str):
         # Program JSON from the database
         program_json = json.dumps(program, indent=2).encode("utf-8")
         zf.writestr(f"{safe_part}.json", program_json)
+
+        added_arc = set()
+        for step in program.get("steps", []):
+            image_bytes = resolve_step_image_bytes(program, step)
+            if image_bytes is None:
+                continue
+            step_no = int(step.get("step_no", 0) or 0)
+            if step_no <= 0:
+                continue
+            arc = str(Path(safe_part) / "imgs" / f"{step_no}.png")
+            if arc in added_arc:
+                continue
+            zf.writestr(arc, image_bytes)
+            added_arc.add(arc)
+
+    zip_buffer.seek(0)
+    return Response(
+        content=zip_buffer.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_part}.zip"'},
+    )
+
+
+@app.get("/api/editor/recipes/{recipe_id}/download")
+async def api_download_editor_recipe_zip(recipe_id: str, request: Request, x_admin_token: Optional[str] = Header(default=None)):
+    actor = get_current_admin_user(request, x_admin_token)
+    recipes = admin_service.list_recipes_for_actor(actor)
+    recipe = next((entry for entry in recipes if entry.get("recipe_id") == recipe_id), None)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+
+    part_name = str(recipe.get("name") or "program")
+    safe_part = sanitize_filename(part_name, fallback="program")
+    program = normalize_program(copy.deepcopy(recipe.get("payload", {})))
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{safe_part}/", "")
+        zf.writestr(f"{safe_part}/imgs/", "")
+        zf.writestr(f"{safe_part}.json", json.dumps(program, indent=2).encode("utf-8"))
 
         added_arc = set()
         for step in program.get("steps", []):
@@ -1418,13 +1623,20 @@ def api_set_program(program: Dict[str, Any], request: Request, x_admin_token: Op
 async def api_upload(
     request: Request,
     file: UploadFile = File(...),
+    organization_id: Optional[str] = Form(default=None),
+    branch_id: Optional[str] = Form(default=None),
     x_admin_token: Optional[str] = Header(default=None),
 ):
     raw = await file.read()
     program = parse_program_json_bytes(raw, "file")
     saved_program = set_state(program, persist=True)
     actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
+    recipe = admin_service.upsert_program_recipe(
+        actor,
+        saved_program,
+        organization_id_override=organization_id,
+        branch_id_override=branch_id,
+    )
     return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
 
 
@@ -1432,13 +1644,20 @@ async def api_upload(
 async def api_upload_zip(
     request: Request,
     file: UploadFile = File(...),
+    organization_id: Optional[str] = Form(default=None),
+    branch_id: Optional[str] = Form(default=None),
     x_admin_token: Optional[str] = Header(default=None),
 ):
     raw = await file.read()
     program = parse_program_from_zip_bytes(raw)
     saved_program = set_state(program, persist=not gcs_enabled())
     actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
+    recipe = admin_service.upsert_program_recipe(
+        actor,
+        saved_program,
+        organization_id_override=organization_id,
+        branch_id_override=branch_id,
+    )
     return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
 
 
@@ -1446,6 +1665,8 @@ async def api_upload_zip(
 async def api_upload_to_gcs(
     request: Request,
     file: UploadFile = File(...),
+    organization_id: Optional[str] = Form(default=None),
+    branch_id: Optional[str] = Form(default=None),
     x_admin_token: Optional[str] = Header(default=None),
 ):
     raw = await file.read()
@@ -1461,7 +1682,12 @@ async def api_upload_to_gcs(
         raise HTTPException(status_code=400, detail="Unsupported file type. Upload .json or .zip")
 
     actor = get_current_admin_user(request, x_admin_token)
-    recipe = admin_service.upsert_program_recipe(actor, saved_program)
+    recipe = admin_service.upsert_program_recipe(
+        actor,
+        saved_program,
+        organization_id_override=organization_id,
+        branch_id_override=branch_id,
+    )
     return {"program": saved_program, "recipe": recipe, "storage_path": program_storage_path(saved_program)}
 
 
@@ -1581,6 +1807,16 @@ def api_clone_step(index: int):
             raise HTTPException(status_code=404, detail="Step not found")
         cloned = copy.deepcopy(steps[index])
     return insert_step_after(index, cloned)
+
+
+@app.post("/api/steps/{index}/move-up")
+def api_move_step_up(index: int):
+    return move_step(index, -1)
+
+
+@app.post("/api/steps/{index}/move-down")
+def api_move_step_down(index: int):
+    return move_step(index, 1)
 
 
 @app.get("/download")

@@ -57,6 +57,11 @@ class UserCreate(BaseModel):
     project_id: Optional[str] = None
     line_id: Optional[str] = None
     station_id: Optional[str] = None
+    organization_ids: list[str] = Field(default_factory=list)
+    branch_ids: list[str] = Field(default_factory=list)
+    project_ids: list[str] = Field(default_factory=list)
+    line_ids: list[str] = Field(default_factory=list)
+    station_ids: list[str] = Field(default_factory=list)
 
 
 class DeviceCreate(BaseModel):
@@ -75,10 +80,7 @@ class RecipeCreate(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
     description: str = ""
     organization_id: str = Field(min_length=3, max_length=64)
-    branch_id: Optional[str] = None
-    project_id: Optional[str] = None
-    line_id: Optional[str] = None
-    station_id: Optional[str] = None
+    branch_id: str = Field(min_length=3, max_length=64)
 
 
 class StorageContextSet(BaseModel):
@@ -90,8 +92,25 @@ class StorageContextSet(BaseModel):
 
 
 class RecipeDeviceMap(BaseModel):
-    recipe_name: str = Field(min_length=1, max_length=120)
+    recipe_id: str = Field(min_length=3, max_length=64)
     device_id: str = Field(min_length=3, max_length=64)
+
+
+class RecipeScopeMapCreate(BaseModel):
+    recipe_id: str = Field(min_length=3, max_length=64)
+    target_type: str = Field(min_length=4, max_length=16)
+    target_id: str = Field(min_length=3, max_length=64)
+
+
+class RecipeDashboardFilters(BaseModel):
+    organization_id: Optional[str] = None
+    branch_id: Optional[str] = None
+    project_id: Optional[str] = None
+    line_id: Optional[str] = None
+    station_id: Optional[str] = None
+    device_id: Optional[str] = None
+    q: Optional[str] = None
+    unmapped_only: bool = False
 
 
 class NameCodeUpdate(BaseModel):
@@ -109,3 +128,8 @@ class UserUpdate(BaseModel):
     user_group: str = Field(min_length=1, max_length=64)
     role: UserRole
     active: bool = True
+    organization_ids: Optional[list[str]] = None
+    branch_ids: Optional[list[str]] = None
+    project_ids: Optional[list[str]] = None
+    line_ids: Optional[list[str]] = None
+    station_ids: Optional[list[str]] = None

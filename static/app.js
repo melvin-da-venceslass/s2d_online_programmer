@@ -4,8 +4,8 @@ const AUTH_EXPIRY_KEY = 'admin_expiry_epoch_ms';
 function clearAuthAndRedirect() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
   localStorage.removeItem(AUTH_EXPIRY_KEY);
-  if (window.location.pathname !== '/admin') {
-    window.location.href = '/admin';
+  if (window.location.pathname !== '/') {
+    window.location.href = '/';
   }
 }
 
@@ -134,6 +134,8 @@ const els = {
   addStepBtn: document.getElementById('add-step-btn'),
   deleteStepBtn: document.getElementById('delete-step-btn'),
   cloneStepBtn: document.getElementById('clone-step-btn'),
+  moveStepUpBtn: document.getElementById('move-step-up-btn'),
+  moveStepDownBtn: document.getElementById('move-step-down-btn'),
   uploadFile: document.getElementById('upload-file'),
   uploadZipFile: document.getElementById('upload-zip-file'),
   stepList: document.getElementById('step-list'),
@@ -413,6 +415,31 @@ function refreshMapDeviceSelect() {
   const stationDevices = devices.filter(d => d.station_id === stationId);
   els.mapDeviceSelect.innerHTML = '<option value="">-- Device --</option>' +
     stationDevices.map(d => `<option value="${d.device_id}">${d.name} (${d.device_code})</option>`).join('');
+}
+
+function recipeIdFromQuery() {
+  const params = new URLSearchParams(window.location.search || '');
+  return (params.get('recipe_id') || '').trim();
+}
+
+function loadRecipeById(recipeId) {
+  if (!recipeId) return false;
+  const recipe = (state.editorTree?.recipes || []).find((entry) => entry.recipe_id === recipeId);
+  if (!recipe?.payload) return false;
+
+  state.program = deepClone(recipe.payload);
+  if (!Array.isArray(state.program.steps) || !state.program.steps.length) {
+    state.program.steps = [blankStep()];
+  }
+
+  state.currentIndex = 0;
+  resetDirty();
+  setEditorUnlocked(true);
+  renderEditor();
+  if (els.recipeDescription) {
+    els.recipeDescription.value = recipe.description || '';
+  }
+  return true;
 }
 
 async function loadPartFromRecipe() {
@@ -736,41 +763,41 @@ async function loadProgramFromServer(programFile) {
 
 function blankStep() {
   return deepClone(window.INITIAL_STEP_TEMPLATE || {
-    upload_image: '',
+    upload_image: '...',
     enable_barcode: false,
-    bc_title: '',
+    bc_title: '...',
     bc_parent: false,
-    bc_child: true,
+    bc_child: false,
     whatloc_enabled: false,
-    check_short_workstation: '',
-    check_part_number: '',
-    check_ref_designator: '',
+    check_short_workstation: '...',
+    check_part_number: '...',
+    check_ref_designator: '...',
     enable_barcode_mes: false,
-    ack_title: '',
+    ack_title: '...',
     request_ack: false,
     enable_ack_mes: false,
     enable_fastening: false,
     step_no: 1,
-    target_preset: '',
-    target_torque: '',
-    target_angle: '',
-    target_min_angle: '',
-    target_max_angle: '',
-    target_tolerance: '',
-    target_rpm: '',
-    TC_AM: true,
+    target_preset: '...',
+    target_torque: '...',
+    target_angle: '...',
+    target_min_angle: '...',
+    target_max_angle: '...',
+    target_tolerance: '...',
+    target_rpm: '...',
+    TC_AM: false,
     AC_TM: false,
-    screw_info: '',
-    remarks: '',
+    screw_info: '...',
+    remarks: '...',
     mes_enable_assy: false,
-    snug_torque: '',
-    free_fastening_angle: '',
-    soft_start: '',
-    free_fastening_speed: '',
-    torque_rising_rate: '',
-    seating_point: '',
-    ramp_up_speed: '',
-    torque_compensation: '',
+    snug_torque: '...',
+    free_fastening_angle: '...',
+    soft_start: '...',
+    free_fastening_speed: '...',
+    torque_rising_rate: '...',
+    seating_point: '...',
+    ramp_up_speed: '...',
+    torque_compensation: '...',
   });
 }
 
@@ -830,9 +857,13 @@ function getActiveMode(step) {
 
 function setExclusiveMode(mode) {
   const step = state.program.steps[state.currentIndex];
+  if (state.currentIndex === 0) {
+    mode = 'Barcode';
+  }
   step.enable_barcode = mode === 'Barcode';
   step.request_ack = mode === 'Acknowledgement';
   step.enable_fastening = mode === 'Fastening';
+  enforceStepConstraintsByStepNo(step, state.currentIndex + 1);
   markDirty();
   renderEditor();
 }
@@ -870,7 +901,7 @@ function normalizeStepForIndex(step, index) {
     }
   }
   normalized.step_no = index + 1;
-  enforceBcRoleByStepNo(normalized, normalized.step_no);
+  enforceStepConstraintsByStepNo(normalized, normalized.step_no);
   return normalized;
 }
 
@@ -998,6 +1029,7 @@ function createField(field, value, index) {
   const inputId = `step-${index}-${field.key}`;
 
   if (field.type === 'checkbox') {
+    const isStepOne = index === 1;
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.id = inputId;
@@ -1006,11 +1038,21 @@ function createField(field, value, index) {
       input.disabled = true;
       input.title = 'This value is set automatically by step number.';
     }
+    const currentStep = state.program.steps[state.currentIndex];
+    if (field.key === 'enable_barcode_mes' && currentStep?.bc_parent) {
+      input.disabled = true;
+      input.title = 'Enable Barcode MES is not allowed for parent barcode steps.';
+    }
+    if (isStepOne && (field.key === 'enable_barcode' || field.key === 'request_ack' || field.key === 'enable_fastening')) {
+      input.disabled = true;
+      input.title = 'Step 1 mode is fixed to Barcode.';
+    }
     input.dataset.key = field.key;
     input.addEventListener('change', () => {
       if (field.key === 'enable_barcode' || field.key === 'request_ack' || field.key === 'enable_fastening') {
         const step = state.program.steps[state.currentIndex];
         applyExclusiveModeFromStep(step, field.key);
+        enforceStepConstraintsByStepNo(step, state.currentIndex + 1);
         renderEditor();
         markDirty();
         return;
@@ -1022,6 +1064,12 @@ function createField(field, value, index) {
       if (field.key === 'bc_child' && input.checked) {
         const parent = els.formContainer.querySelector('[data-key="bc_parent"]');
         if (parent) parent.checked = false;
+      }
+      if (field.key === 'enable_barcode_mes' && input.checked) {
+        const step = state.program.steps[state.currentIndex];
+        if (step?.bc_parent) {
+          input.checked = false;
+        }
       }
       markDirty();
     });
@@ -1045,13 +1093,18 @@ function createField(field, value, index) {
   return wrapper;
 }
 
-function enforceBcRoleByStepNo(step, stepNo) {
+function enforceStepConstraintsByStepNo(step, stepNo) {
   if (stepNo === 1) {
+    step.enable_barcode = true;
+    step.request_ack = false;
+    step.enable_fastening = false;
     step.bc_parent = true;
     step.bc_child = false;
   } else {
     step.bc_parent = false;
-    step.bc_child = true;
+  }
+  if (step.bc_parent) {
+    step.enable_barcode_mes = false;
   }
 }
 
@@ -1994,7 +2047,7 @@ function collectFormStep() {
     }
   }
   step.step_no = state.currentIndex + 1;
-  enforceBcRoleByStepNo(step, step.step_no);
+  enforceStepConstraintsByStepNo(step, step.step_no);
   return step;
 }
 
@@ -2495,6 +2548,44 @@ async function cloneStep() {
   renderEditor();
 }
 
+async function moveStepUp() {
+  if (state.currentIndex <= 0) {
+    return;
+  }
+  if (state.dirty) {
+    alert('Save the current step before reordering steps.');
+    return;
+  }
+  const response = await fetch(`/api/steps/${state.currentIndex}/move-up`, { method: 'POST' });
+  if (!response.ok) {
+    alert('Move up failed.');
+    return;
+  }
+  state.program = await response.json();
+  state.currentIndex -= 1;
+  resetDirty();
+  renderEditor();
+}
+
+async function moveStepDown() {
+  if (state.currentIndex >= state.program.steps.length - 1) {
+    return;
+  }
+  if (state.dirty) {
+    alert('Save the current step before reordering steps.');
+    return;
+  }
+  const response = await fetch(`/api/steps/${state.currentIndex}/move-down`, { method: 'POST' });
+  if (!response.ok) {
+    alert('Move down failed.');
+    return;
+  }
+  state.program = await response.json();
+  state.currentIndex += 1;
+  resetDirty();
+  renderEditor();
+}
+
 async function deleteStep() {
   if (state.dirty) {
     alert('Save the current step before deleting or switching steps.');
@@ -2543,26 +2634,32 @@ function bindEvents() {
   });
 
   els.saveStepBtn.addEventListener('click', saveStep);
-  els.saveProgramBtn.addEventListener('click', saveProgram);
+  if (els.saveProgramBtn) {
+    els.saveProgramBtn.addEventListener('click', saveProgram);
+  }
   if (els.previewStepsBtn) {
     els.previewStepsBtn.addEventListener('click', () => {
       window.open('/preview', '_blank', 'noopener,noreferrer');
     });
   }
-  els.downloadBtn.addEventListener('click', async (event) => {
-    event.preventDefault();
-    const payload = buildDownloadPayload();
-    const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${sanitizeFilename(payload.partname)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
-  els.downloadPdfBtn.addEventListener('click', async () => {
+  if (els.downloadBtn) {
+    els.downloadBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      const payload = buildDownloadPayload();
+      const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${sanitizeFilename(payload.partname)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  }
+
+  if (els.downloadPdfBtn) {
+    els.downloadPdfBtn.addEventListener('click', async () => {
     const payload = buildDownloadPayload();
     const response = await fetch('/download-pdf', {
       method: 'POST',
@@ -2583,8 +2680,11 @@ function bindEvents() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
-  els.downloadWiBtn.addEventListener('click', async () => {
+    });
+  }
+
+  if (els.downloadWiBtn) {
+    els.downloadWiBtn.addEventListener('click', async () => {
     const payload = buildDownloadPayload();
     const response = await fetch('/download-wi', {
       method: 'POST',
@@ -2605,15 +2705,26 @@ function bindEvents() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
+    });
+  }
   els.insertStepBtn.addEventListener('click', insertAfterCurrent);
   els.addStepBtn.addEventListener('click', addStep);
   els.cloneStepBtn.addEventListener('click', cloneStep);
   els.deleteStepBtn.addEventListener('click', deleteStep);
+  if (els.moveStepUpBtn) {
+    els.moveStepUpBtn.addEventListener('click', moveStepUp);
+  }
+  if (els.moveStepDownBtn) {
+    els.moveStepDownBtn.addEventListener('click', moveStepDown);
+  }
 
   els.modeCards.forEach((card) => {
     card.addEventListener('click', () => {
-      setExclusiveMode(card.querySelector('h3').textContent);
+      const mode = card.querySelector('h3').textContent;
+      if (state.currentIndex === 0 && mode !== 'Barcode') {
+        return;
+      }
+      setExclusiveMode(mode);
     });
   });
 
@@ -2710,6 +2821,8 @@ async function init() {
   state.lastSavedSnapshot = deepClone(state.program);
   await loadUserSession();
   await loadEditorTree();
+  const selectedRecipeId = recipeIdFromQuery();
+  const loadedFromQuery = loadRecipeById(selectedRecipeId);
   attachEditorCascading('load-');
   attachEditorCascading('map-');
   bindEvents();
@@ -2717,6 +2830,9 @@ async function init() {
   updateProgramInfoFields();
   preloadProgramImages(state.program).catch(() => {
   });
+  if (!loadedFromQuery) {
+    setEditorUnlocked(false);
+  }
   renderEditor();
   loadStorageConfig();
 }
