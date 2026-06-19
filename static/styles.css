@@ -551,16 +551,16 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: 320px;
+  max-height: 520px;
   overflow: auto;
   border-top: 0;
 }
 .step-list li {
-  padding: .5rem .58rem;
+  padding: .8rem .72rem;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
   display: grid;
-  gap: .35rem;
+  gap: .45rem;
   font-size: .83rem;
 }
 .step-list li.active { background: var(--accent); font-weight: 700; border-left: 3px solid var(--primary); padding-left: calc(.58rem - 3px); }

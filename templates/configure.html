@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Configure – Program Editor</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    html, body { height: auto; overflow-y: auto; }
+    .cfg-page { max-width: auto; width: 100%; margin: 48px auto; padding: 0 24px 80px; box-sizing: border-box; }
+    .cfg-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 24px; }
+    .cfg-card h2 { margin: 0 0 24px; font-size: 1.25rem; font-weight: 700; color: #232629; }
+    .cfg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .cfg-field { display: flex; flex-direction: column; gap: 5px; }
+    .cfg-field.full { grid-column: 1 / -1; }
+    .cfg-field.half { grid-column: span 2; }
+    @media (max-width: 640px) { .cfg-field.half { grid-column: 1 / -1; } }
+    .cfg-field label { font-size: .8rem; font-weight: 600; color: #4b5b76; }
+    .cfg-field input[type="text"], .cfg-field input[type="password"] {
+      padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
+      font-size: .9rem; color: #232629; background: #f8fafc;
+    }
+    .cfg-field input:focus {
+      outline: none; border-color: #FF7733; box-shadow: 0 0 0 3px rgba(255,119,51,.15);
+    }
+    .cfg-field.checkbox-field { flex-direction: row; align-items: center; gap: 10px; padding-top: 8px; }
+    .cfg-field.checkbox-field label { margin: 0; font-size: .9rem; color: #232629; }
+    .cfg-field.checkbox-field input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #FF7733; }
+    .cfg-actions { display: flex; gap: 12px; margin-top: 24px; }
+    #cfg-status { font-size: .85rem; min-height: 20px; margin-top: 10px; }
+    #cfg-status.ok { color: #16a34a; }
+    #cfg-status.error { color: #dc2626; }
+    .section-divider { font-size: .75rem; font-weight: 700; color: #FF7733; text-transform: uppercase;
+      letter-spacing: .08em; grid-column: 1/-1; margin: 8px 0 0; padding-bottom: 6px;
+      border-bottom: 1px solid #f1f5f9; }
+    .toggle-groups { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-top: 4px; }
+    .toggle-group { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .toggle-group-label { font-size: .72rem; font-weight: 700; color: #FF7733; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
+    .toggle-row { display: flex; align-items: center; gap: 10px; }
+    .toggle-row label { font-size: .88rem; color: #232629; cursor: pointer; }
+    .toggle-row input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #FF7733; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
+    </div>
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link" href="/recipe-management">Recipes</a></li>
+      <li><a class="app-nav-link" href="/editor">Editor</a></li>
+      <li><a class="app-nav-link" href="/preview">Preview</a></li>
+      <li><a class="app-nav-link is-active" href="/configure">Configure</a></li>
+      <li><a class="app-nav-link" href="/system-settings">System</a></li>
+    </ul>
+  </nav>
+
+  <div class="cfg-page">
+    <div class="cfg-card">
+      <h2>Application Configuration</h2>
+      <div class="cfg-grid">
+
+        <div class="section-divider">MES &amp; Conduit</div>
+
+        <div class="cfg-field half">
+          <label for="cfg-MesUrl">MES URL</label>
+          <input type="text" id="cfg-MesUrl" placeholder="http://..." />
+        </div>
+        <div class="cfg-field half">
+          <label for="cfg-ConduitUrl">Conduit URL</label>
+          <input type="text" id="cfg-ConduitUrl" placeholder="http://..." />
+        </div>
+        <div class="cfg-field half">
+          <label for="cfg-MesStationId">MES Station ID</label>
+          <input type="text" id="cfg-MesStationId" placeholder="1234.." />
+        </div>
+        <div class="cfg-field half">
+          <label for="cfg-MesDataSource">MES Data Source</label>
+          <input type="text" id="cfg-MesDataSource" placeholder="p12345dc" />
+        </div>
+
+        <div class="section-divider">FTP / SMB</div>
+
+        <div class="cfg-field">
+          <label for="cfg-MesFTP">MES FTP Host</label>
+          <input type="text" id="cfg-MesFTP" placeholder="ftp.example.com or 192.xxx.xxx.xxx" />
+        </div>
+        <div class="cfg-field">
+          <label for="cfg-MesFTPDir">MES FTP Directory</label>
+          <input type="text" id="cfg-MesFTPDir" placeholder="/path/to/directory" />
+        </div>
+        <div class="cfg-field">
+          <label for="cfg-ftp_user">FTP Username</label>
+          <input type="text" id="cfg-ftp_user" placeholder="username" />
+        </div>
+        <div class="cfg-field">
+          <label for="cfg-ftp_pass">FTP Password</label>
+          <input type="password" id="cfg-ftp_pass" placeholder="*****" />
+        </div>
+        <div class="cfg-field full">
+          <label for="cfg-smbPath">SMB Path</label>
+          <input type="text" id="cfg-smbPath" placeholder="\\\\server\\share_path or \\\\192.xxx.xxx.xxx\\share_path" />
+        </div>
+
+        <div class="section-divider">Toggles</div>
+
+        <div class="toggle-groups">
+          <!-- G1: Alerts -->
+          <div class="toggle-group">
+            <div class="toggle-group-label">Alerts</div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-show_ok_alert" />
+              <label for="cfg-show_ok_alert">Show OK Alert</label>
+            </div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-show_ng_alert" />
+              <label for="cfg-show_ng_alert">Show NG Alert</label>
+            </div>
+          </div>
+
+          <!-- G2: Saving Logs -->
+          <div class="toggle-group">
+            <div class="toggle-group-label">Saving Logs</div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-save_conduit_log" />
+              <label for="cfg-save_conduit_log">Save Conduit Log</label>
+            </div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-save_assy_log" />
+              <label for="cfg-save_assy_log">Save Assy Log</label>
+            </div>
+          </div>
+
+          <!-- G3: Transfer -->
+          <div class="toggle-group">
+            <div class="toggle-group-label">Transfer</div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-ftp" />
+              <label for="cfg-ftp">Enable FTP</label>
+            </div>
+            <div class="toggle-row">
+              <input type="checkbox" id="cfg-smb" />
+              <label for="cfg-smb">Enable SMB</label>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="cfg-actions">
+        <button id="cfg-save-btn" class="primary">Save Configuration</button>
+        <button id="cfg-reload-btn" class="secondary">Reload</button>
+      </div>
+      <p id="cfg-status"></p>
+    </div>
+  </div>
+
+  <div id="app-loader" style="position:fixed;inset:0;z-index:9999;background:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s;">
+    <div style="font-size:2rem;font-weight:800;color:#232629;letter-spacing:-.5px;">Program Editor</div>
+    <div style="margin-top:10px;color:#232629;opacity:.55;font-size:1rem;">SAGS · MVIIS</div>
+    <div style="margin-top:24px;width:40px;height:40px;border:4px solid rgba(35,38,41,.15);border-top-color:#FF7733;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+  </div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+  <footer style="position:fixed;bottom:0;left:0;right:0;z-index:100;background:#232629;color:rgba(255,255,255,.55);font-size:.7rem;text-align:center;padding:.45rem 1rem;letter-spacing:.02em;">
+    Solution developed &amp; created by <strong style="color:#FF7733;">Melvin</strong> &amp; <strong style="color:#FF7733;">Venfra Innovative Industrial Solutions</strong> &mdash; MVIIS &copy; 2021
+  </footer>
+  <script src="/static/configure.js"></script>
+  <script src="/static/nav_loader.js"></script>
+</body>
+</html>

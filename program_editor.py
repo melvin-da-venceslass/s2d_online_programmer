@@ -2,16 +2,23 @@
 
 import copy
 import json
+import os
+import re
 import threading
 import base64
 import io
 import zipfile
+from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+import shutil
+import subprocess
+
+import pandas as pd
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -26,11 +33,15 @@ DATA_FILE = BASE_DIR / "template.json"
 STATIC_DIR = BASE_DIR / "static"
 INDEX_FILE = BASE_DIR / "templates" / "index.html"
 PREVIEW_FILE = BASE_DIR / "templates" / "preview.html"
+DOWNLOAD_LOGS_FILE = BASE_DIR / "templates" / "download_logs.html"
+CONFIGURE_FILE = BASE_DIR / "templates" / "configure.html"
+SYSTEM_SETTINGS_FILE = BASE_DIR / "templates" / "system_settings.html"
+RECIPE_MANAGEMENT_FILE = BASE_DIR / "templates" / "recipe_management.html"
 PROGRAMS_DIR = Path(settings.programs_dir)
 
 DIRECT_UPLOAD_THRESHOLD_BYTES = 20 * 1024 * 1024
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(title=settings.app_name, version="1.0.0", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 PROGRAMS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -415,7 +426,7 @@ def draw_step_pdf_block(
     pdf.roundRect(x + 1, y + height - header_h - 1, width - 2, header_h, 8, stroke=0, fill=1)
 
     padding = 18
-    image_area_width = width * 0.75
+    image_area_width = width * 0.52
     gutter = 14
     image_area_x = x + width - image_area_width
     image_x = image_area_x + (padding * 0.35)
@@ -481,10 +492,19 @@ def draw_step_pdf_block(
         value_font = "Helvetica"
         value_size = 8.4
         label_width = stringWidth(label_text, label_font, label_size)
-        value_max_width = max(36, text_w - 10 - label_width)
-        value_lines = wrap_pdf_text(value, value_font, value_size, value_max_width)
-        line_count = max(1, len(value_lines))
-        block_height = (line_count * line_height) + row_gap
+        # Use stacked layout when label is too wide to leave room for value inline
+        inline_value_width = text_w - label_width - 6
+        stacked = inline_value_width < 60
+        if stacked:
+            value_max_width = max(60, text_w - 12)
+            value_lines = wrap_pdf_text(value, value_font, value_size, value_max_width)
+            line_count = max(1, len(value_lines))
+            block_height = (line_count + 1) * line_height + row_gap
+        else:
+            value_max_width = inline_value_width
+            value_lines = wrap_pdf_text(value, value_font, value_size, value_max_width)
+            line_count = max(1, len(value_lines))
+            block_height = (line_count * line_height) + row_gap
         if current_y - block_height < y + padding:
             break
 
@@ -494,7 +514,13 @@ def draw_step_pdf_block(
 
         pdf.setFillColor(value_color)
         pdf.setFont(value_font, value_size)
-        if value_lines:
+        if stacked:
+            current_y -= line_height
+            for line in value_lines:
+                pdf.drawString(row_x + 8, current_y, line)
+                current_y -= line_height
+            current_y += line_height  # will be decremented below
+        elif value_lines:
             pdf.drawString(row_x + label_width + 4, current_y, value_lines[0])
             for line in value_lines[1:]:
                 current_y -= line_height
@@ -631,14 +657,14 @@ def parse_program_json_bytes(raw: bytes, source_label: str) -> Dict[str, Any]:
     try:
         return json.loads(raw.decode("utf-8"))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON {source_label}: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Invalid JSON in uploaded file.") from exc
 
 
 def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
     try:
         archive = zipfile.ZipFile(io.BytesIO(raw))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid ZIP file: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Invalid or corrupt ZIP file.") from exc
 
     json_entry = None
     for info in archive.infolist():
@@ -654,7 +680,7 @@ def parse_program_from_zip_bytes(raw: bytes) -> Dict[str, Any]:
     try:
         program = json.loads(archive.read(json_entry).decode("utf-8"))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON inside ZIP: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Invalid JSON inside ZIP.") from exc
 
     image_members: Dict[int, str] = {}
     for info in archive.infolist():
@@ -752,6 +778,11 @@ def startup() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 def index():
+    return RedirectResponse(url="/recipe-management")
+
+
+@app.get("/editor", response_class=HTMLResponse)
+def editor_page():
     html = INDEX_FILE.read_text(encoding="utf-8")
     html = html.replace("{{ initial_program | safe }}", json.dumps(get_state()))
     html = html.replace("{{ initial_step_template | safe }}", json.dumps(STEP_TEMPLATE))
@@ -795,7 +826,7 @@ def api_load_program(program_file: str):
     try:
         program = json.loads(target.read_text(encoding="utf-8"))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid program JSON: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Invalid program JSON.") from exc
 
     return set_state(program)
 
@@ -971,9 +1002,420 @@ def api_template():
     return copy.deepcopy(STEP_TEMPLATE)
 
 
+# ── System Settings ───────────────────────────────────────────────────────────
+
+@app.get("/system-settings", response_class=HTMLResponse)
+def system_settings_page():
+    return HTMLResponse(content=SYSTEM_SETTINGS_FILE.read_text(encoding="utf-8"))
+
+
+@app.post("/api/system/shutdown")
+def api_shutdown():
+    try:
+        subprocess.Popen(["sudo", "shutdown", "now"])
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to initiate shutdown.")
+    return {"status": "ok", "action": "shutdown"}
+
+
+@app.post("/api/system/reboot")
+def api_reboot():
+    try:
+        subprocess.Popen(["sudo", "reboot", "now"])
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to initiate reboot.")
+    return {"status": "ok", "action": "reboot"}
+
+
+@app.post("/api/system/reset")
+def api_reset():
+    try:
+        subprocess.Popen(["sudo", "pkill", "Xorg"])
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to initiate reset.")
+    return {"status": "ok", "action": "reset"}
+
+
+@app.post("/api/system/datetime")
+async def api_set_datetime(request: Request):
+    try:
+        payload = await request.json()
+        iso_str = payload.get("datetime", "")
+        # Validate format: ISO 8601 e.g. "2026-06-19T14:30:00"
+        dt = datetime.fromisoformat(iso_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid datetime. Use ISO 8601 format.")
+    try:
+        formatted = dt.strftime("%Y-%m-%d %H:%M:%S")
+        subprocess.run(["sudo", "date", "-s", formatted], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        raise HTTPException(status_code=500, detail="Failed to update system date/time.")
+    return {"status": "ok", "datetime": dt.isoformat()}
+
+
+# ── Recipe Management ─────────────────────────────────────────────────────────
+
+@app.get("/recipe-management", response_class=HTMLResponse)
+def recipe_management_page():
+    return HTMLResponse(content=RECIPE_MANAGEMENT_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/api/recipes")
+def api_list_recipes():
+    recipes = []
+    for fp in sorted(PROGRAMS_DIR.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            recipes.append({
+                "file": fp.name,
+                "partname": data.get("partname", fp.stem),
+                "steps": len(data.get("steps", [])),
+            })
+        except Exception:
+            recipes.append({"file": fp.name, "partname": fp.stem, "steps": 0})
+    return {"recipes": recipes}
+
+
+def _safe_program_path(filename: str) -> Path:
+    """Resolve a program JSON path safely within PROGRAMS_DIR."""
+    safe = Path(filename).name  # strip any directory components
+    if not safe.lower().endswith(".json"):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    target = (PROGRAMS_DIR / safe).resolve()
+    if not str(target).startswith(str(PROGRAMS_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    return target
+
+
+@app.delete("/api/recipes/{filename}")
+def api_delete_recipe(filename: str):
+    target = _safe_program_path(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+    # Also remove the associated image folder
+    folder = PROGRAMS_DIR / target.stem
+    if folder.exists() and folder.is_dir():
+        shutil.rmtree(folder)
+    target.unlink()
+    return {"status": "ok", "deleted": filename}
+
+
+@app.post("/api/recipes/{filename}/rename")
+async def api_rename_recipe(filename: str, request: Request):
+    try:
+        payload = await request.json()
+        new_name: str = payload.get("new_name", "").strip()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON.")
+
+    if not new_name:
+        raise HTTPException(status_code=400, detail="new_name is required.")
+
+    new_safe = sanitize_filename(new_name)
+    if not new_safe:
+        raise HTTPException(status_code=400, detail="Invalid new name.")
+
+    target = _safe_program_path(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+    new_json = PROGRAMS_DIR / f"{new_safe}.json"
+    if new_json.exists():
+        raise HTTPException(status_code=409, detail="A recipe with that name already exists.")
+
+    # Read, update partname, write to new file
+    data = json.loads(target.read_text(encoding="utf-8"))
+    data["partname"] = new_name
+    new_json.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+    # Rename image folder if present
+    old_folder = PROGRAMS_DIR / target.stem
+    new_folder = PROGRAMS_DIR / new_safe
+    if old_folder.exists() and old_folder.is_dir():
+        old_folder.rename(new_folder)
+
+    target.unlink()
+    return {"status": "ok", "file": new_json.name, "partname": new_name}
+
+
+@app.post("/api/recipes/{filename}/duplicate")
+async def api_duplicate_recipe(filename: str, request: Request):
+    try:
+        payload = await request.json()
+        new_name: str = payload.get("new_name", "").strip()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON.")
+
+    if not new_name:
+        raise HTTPException(status_code=400, detail="new_name is required.")
+
+    new_safe = sanitize_filename(new_name)
+    if not new_safe:
+        raise HTTPException(status_code=400, detail="Invalid new name.")
+
+    target = _safe_program_path(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+    new_json = PROGRAMS_DIR / f"{new_safe}.json"
+    if new_json.exists():
+        raise HTTPException(status_code=409, detail="A recipe with that name already exists.")
+
+    # Copy JSON with updated partname
+    data = json.loads(target.read_text(encoding="utf-8"))
+    data["partname"] = new_name
+    new_json.write_text(json.dumps(data, indent=4), encoding="utf-8")
+
+    # Copy image folder if present
+    old_folder = PROGRAMS_DIR / target.stem
+    new_folder = PROGRAMS_DIR / new_safe
+    if old_folder.exists() and old_folder.is_dir():
+        shutil.copytree(old_folder, new_folder)
+
+    return {"status": "ok", "file": new_json.name, "partname": new_name}
+
+
+@app.get("/api/recipes/{filename}/download")
+def api_download_recipe_zip(filename: str):
+    target = _safe_program_path(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+
+    program = json.loads(target.read_text(encoding="utf-8"))
+    part = sanitize_filename(program.get("partname"), fallback=target.stem)
+    image_dir = PROGRAMS_DIR / target.stem / "imgs"
+
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{part}/", "")
+        zf.writestr(f"{part}/imgs/", "")
+        zf.writestr(f"{part}.json", json.dumps(program, indent=4))
+        if image_dir.exists():
+            for img in image_dir.iterdir():
+                if img.is_file():
+                    zf.write(img, arcname=str(Path(part) / "imgs" / img.name))
+
+    mem.seek(0)
+    zip_name = f"mviis_recipe_{part}.zip"
+    return Response(
+        content=mem.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+    )
+
+
+@app.get("/api/recipes/{filename}/pdf")
+def api_download_recipe_pdf(filename: str):
+    target = _safe_program_path(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+    program = normalize_program(json.loads(target.read_text(encoding="utf-8")))
+    pdf_bytes = build_steps_pdf(program)
+    part = sanitize_filename(program.get("partname"), fallback=target.stem)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{part}_steps.pdf"'},
+    )
+
+
+@app.get("/api/recipes/{filename}/wi")
+def api_download_recipe_wi(filename: str):
+    target = _safe_program_path(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+    program = normalize_program(json.loads(target.read_text(encoding="utf-8")))
+    pdf_bytes = build_steps_pdf(program, include_checkbox_fields=False)
+    part = sanitize_filename(program.get("partname"), fallback=target.stem)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{part}_wi.pdf"'},
+    )
+
+
+# ── Download Logs ─────────────────────────────────────────────────────────────
+
+@app.get("/download-logs", response_class=HTMLResponse)
+def download_logs_page():
+    return HTMLResponse(content=DOWNLOAD_LOGS_FILE.read_text(encoding="utf-8"))
+
+
+@app.post("/api/logs/clear")
+def api_clear_logs(log_type: str = Query(..., description="system | conduit | assy | all")):
+    log_dirs = {
+        "system":  settings.system_log_path,
+        "conduit": settings.conduit_log_path,
+        "assy":    settings.assembly_log_path,
+    }
+    targets = list(log_dirs.items()) if log_type == "all" else []
+    if log_type != "all":
+        if log_type not in log_dirs:
+            raise HTTPException(status_code=400, detail="Invalid log_type. Must be system, conduit, assy, or all.")
+        targets = [(log_type, log_dirs[log_type])]
+
+    deleted = 0
+    for _, dir_str in targets:
+        dir_path = Path(dir_str)
+        if not dir_path.exists() or not dir_path.is_dir():
+            continue
+        for f in dir_path.iterdir():
+            if f.is_file():
+                try:
+                    f.unlink()
+                    deleted += 1
+                except OSError:
+                    pass
+
+    return {"deleted": deleted, "log_type": log_type}
+
+
+@app.get("/api/logs/download")
+def api_download_logs(
+    log_type: str = Query(..., description="system | conduit | assy"),
+    start_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+):
+    log_dirs = {
+        "system": settings.system_log_path,
+        "conduit": settings.conduit_log_path,
+        "assy": settings.assembly_log_path,
+    }
+    if log_type not in log_dirs:
+        raise HTTPException(status_code=400, detail="Invalid log_type. Must be system, conduit, or assy.")
+
+    in_path = Path(log_dirs[log_type])
+    if not in_path.exists() or not in_path.is_dir():
+        raise HTTPException(status_code=404, detail="Log directory not found or not configured for this platform.")
+
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.") from exc
+
+    def _file_in_range(filepath: Path) -> bool:
+        if start_dt is None and end_dt is None:
+            return True
+        try:
+            mtime = date.fromtimestamp(filepath.stat().st_mtime)
+            if start_dt and mtime < start_dt:
+                return False
+            if end_dt and mtime > end_dt:
+                return False
+            return True
+        except OSError:
+            return True
+
+    if log_type in ("system", "conduit"):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            matched = False
+            for f in sorted(in_path.iterdir()):
+                if f.is_file() and _file_in_range(f):
+                    zf.write(f, arcname=f.name)
+                    matched = True
+        if not matched:
+            raise HTTPException(status_code=404, detail="No log files found for the given date range.")
+        buf.seek(0)
+        filename = f"{log_type}_logs.zip"
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # ── Assy log: flatten JSON → CSV grouped by date ──────────────────────────
+    df_list: List[Any] = []
+    runningtime = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    for file in sorted(in_path.iterdir()):
+        try:
+            if (
+                file.is_file()
+                and file.suffix.lower() == ".json"
+                and re.match(r"^[a-zA-Z0-9-]+\.json$", file.name)
+                and _file_in_range(file)
+            ):
+                tdf = pd.read_json(file)
+                if len(tdf.get("steps", [])) > 0:
+                    df_list.append(tdf)
+        except Exception:
+            pass
+
+    if not df_list:
+        raise HTTPException(status_code=404, detail="No assy log files found for the given date range.")
+
+    df = pd.concat(df_list, ignore_index=True)
+    ndf = pd.json_normalize(df["steps"])
+    df = df.drop("steps", axis=1)
+    ndf.reset_index(drop=True, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    df = pd.concat([df, ndf], axis=1)
+
+    csv_buf = io.BytesIO()
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if "date" in df.columns:
+            grouped = df.groupby(df["date"].fillna("unknown_date").astype(str))
+            for date_key, group_df in grouped:
+                safe_date = re.sub(r"[^a-zA-Z0-9_-]+", "-", date_key).strip("-") or "unknown_date"
+                csv_name = f"exported_log_{safe_date}_{runningtime}.csv"
+                csv_buf = io.StringIO()
+                group_df.to_csv(csv_buf, index=False)
+                zf.writestr(csv_name, csv_buf.getvalue())
+        else:
+            csv_buf2 = io.StringIO()
+            df.to_csv(csv_buf2, index=False)
+            zf.writestr(f"exported_log_{runningtime}.csv", csv_buf2.getvalue())
+
+    zip_buf.seek(0)
+    return StreamingResponse(
+        iter([zip_buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="assy_logs_{runningtime}.zip"'},
+    )
+
+
+# ── App Configuration ─────────────────────────────────────────────────────────
+
+@app.get("/configure", response_class=HTMLResponse)
+def configure_page():
+    return HTMLResponse(content=CONFIGURE_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/api/config/mes")
+def api_get_mes_config():
+    config_path = Path(settings.mes_config_file)
+    if not config_path.exists():
+        return {"mes_config": {}}
+    try:
+        return json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"mes_config": {}}
+
+
+@app.post("/api/config/mes")
+async def api_set_mes_config(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+
+    if not isinstance(payload, dict) or "mes_config" not in payload:
+        raise HTTPException(status_code=400, detail="Payload must have a 'mes_config' key")
+
+    config_path = Path(settings.mes_config_file)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(payload, indent=4), encoding="utf-8")
+
+    return {"status": "ok", "mes_config": payload.get("mes_config", {})}
+
+
 @app.get("/{full_path:path}")
 def catch_all(full_path: str):
-    return RedirectResponse(url="/")
+    return RedirectResponse(url="/recipe-management")
 
 
 if __name__ == "__main__":

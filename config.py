@@ -42,6 +42,48 @@ def _as_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _resolve_log_path(env_prefix: str, default_linux: str) -> str:
+    """
+    Resolve a per-platform log directory from env vars.
+    env_prefix examples: 'CONDUIT_LOG', 'ASSEMBLY_LOG', 'SYSTEM_LOG'
+    Env vars checked: WIN_<prefix>_PATH, LINUX_<prefix>_PATH, MAC_<prefix>_PATH
+    Falls back to PROGRAMS_DIR/../logs/<suffix> if nothing set.
+    """
+    explicit = os.getenv(f"{env_prefix}_PATH", "").strip()
+    if explicit:
+        return explicit
+
+    platform = sys.platform
+    if platform == "win32":
+        val = os.getenv(f"WIN_{env_prefix}_PATH", "").strip()
+        return val if val else default_linux
+    if platform == "darwin":
+        val = os.getenv(f"MAC_{env_prefix}_PATH", "").strip()
+        return val if val else str(Path(__file__).resolve().parent / "logs" / env_prefix.lower().replace("_log", ""))
+    val = os.getenv(f"LINUX_{env_prefix}_PATH", "").strip()
+    return val if val else default_linux
+
+
+def _resolve_mes_config_file() -> str:
+    """
+    Resolve the MES config JSON file path.
+    Env vars: MAC_MES_CONFIG, WIN_MES_CONFIG, LINUX_MES_CONFIG (no _PATH suffix).
+    """
+    explicit = os.getenv("MES_CONFIG_FILE", "").strip()
+    if explicit:
+        return explicit
+
+    platform = sys.platform
+    if platform == "win32":
+        val = os.getenv("WIN_MES_CONFIG", "").strip()
+        return val if val else r"C:\Users\Melvin Venceslass\APP_ENV\mes_config.json"
+    if platform == "darwin":
+        val = os.getenv("MAC_MES_CONFIG", "").strip()
+        return val if val else str(Path(__file__).resolve().parent / "mes_config.json")
+    val = os.getenv("LINUX_MES_CONFIG", "").strip()
+    return val if val else "/home/mviis/mes_config.json"
+
+
 def _resolve_programs_dir() -> str:
     """
     Priority:
@@ -79,6 +121,12 @@ class Settings:
     debug: bool = _as_bool("DEBUG", False)
 
     programs_dir: str = _resolve_programs_dir()
+
+    conduit_log_path: str = _resolve_log_path("CONDUIT_LOG", "/home/mviis/logs/conduit")
+    assembly_log_path: str = _resolve_log_path("ASSEMBLY_LOG", "/home/mviis/logs/assy")
+    system_log_path: str = _resolve_log_path("SYSTEM_LOG", "/home/mviis/logs/system")
+
+    mes_config_file: str = _resolve_mes_config_file()
 
 
 settings = Settings()

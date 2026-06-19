@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>System Settings – Program Editor</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    html, body { height: auto; overflow-y: auto; }
+    .ss-page { max-width: 760px; width: 100%; margin: 48px auto; padding: 0 24px 80px; box-sizing: border-box; }
+    .ss-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 24px; }
+    .ss-card h2 { margin: 0 0 6px; font-size: 1.15rem; font-weight: 700; color: #232629; }
+    .ss-card p.desc { margin: 0 0 20px; font-size: .85rem; color: #6b7a95; }
+    .ss-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .ss-action-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+      padding: 14px 20px; border-radius: 8px; border: 1px solid #e2e8f0; background: #f8fafc;
+      cursor: pointer; font-family: inherit; text-align: left; min-width: 160px; transition: background .13s, border-color .13s; }
+    .ss-action-btn:hover { background: #fff3ec; border-color: #FF7733; }
+    .ss-action-btn .btn-label { font-size: .9rem; font-weight: 700; color: #232629; }
+    .ss-action-btn .btn-sub  { font-size: .75rem; color: #6b7a95; font-family: monospace; }
+    .ss-action-btn.danger:hover { background: #fff0f0; border-color: #dc2626; }
+    .ss-action-btn.danger .btn-label { color: #dc2626; }
+    .dt-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .dt-row input[type="datetime-local"] { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: .9rem; color: #232629; background: #f8fafc; }
+    .dt-row input:focus { outline: none; border-color: #FF7733; box-shadow: 0 0 0 3px rgba(255,119,51,.15); }
+    #ss-status { font-size: .85rem; min-height: 20px; margin-top: 14px; }
+    #ss-status.ok { color: #16a34a; }
+    #ss-status.error { color: #dc2626; }
+
+    /* Confirmation modal */
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-backdrop.open { display: flex; }
+    .modal { background: #fff; border-radius: 10px; padding: 28px 32px; max-width: 360px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,.18); }
+    .modal h3 { margin: 0 0 10px; font-size: 1.05rem; color: #232629; }
+    .modal p { margin: 0 0 20px; font-size: .88rem; color: #4b5b76; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
+    </div>
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link" href="/recipe-management">Recipes</a></li>
+      <li><a class="app-nav-link" href="/editor">Editor</a></li>
+      <li><a class="app-nav-link" href="/preview">Preview</a></li>
+      <li><a class="app-nav-link" href="/configure">Configure</a></li>
+      <li><a class="app-nav-link is-active" href="/system-settings">System</a></li>
+    </ul>
+  </nav>
+
+  <div class="ss-page">
+
+    <!-- Power -->
+    <div class="ss-card">
+      <h2>Power Controls</h2>
+      <p class="desc">Control the system power state. These actions are immediate and irreversible.</p>
+      <div class="ss-actions">
+        <button class="ss-action-btn danger" data-action="shutdown">
+          <span class="btn-label">Shutdown</span>
+          <span class="btn-sub">sudo shutdown now</span>
+        </button>
+        <button class="ss-action-btn danger" data-action="reboot">
+          <span class="btn-label">Reboot</span>
+          <span class="btn-sub">sudo reboot now</span>
+        </button>
+        <button class="ss-action-btn" data-action="reset">
+          <span class="btn-label">Reset Display</span>
+          <span class="btn-sub">sudo pkill Xorg</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Date / Time -->
+    <div class="ss-card">
+      <h2>Date &amp; Time</h2>
+      <p class="desc">Sync the server's date and time with your browser's current time, or set a custom value.</p>
+      <div class="dt-row">
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Date &amp; Time</label>
+          <input type="datetime-local" id="dt-input" />
+        </div>
+        <button id="dt-now-btn" class="secondary" type="button">Use Browser Time</button>
+        <button id="dt-set-btn" class="primary" type="button">Update System Time</button>
+      </div>
+      <p id="ss-status"></p>
+    </div>
+
+    <!-- Clear Logs -->
+    <div class="ss-card">
+      <h2>Clear Logs</h2>
+      <p class="desc">Permanently delete all files in the selected log directory. This action cannot be undone.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;">
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Log Type</label>
+          <select id="cl-log-type" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;">
+            <option value="system">System Log</option>
+            <option value="conduit">Conduit Log</option>
+            <option value="assy">Assy Log</option>
+            <option value="all">All Logs</option>
+          </select>
+        </div>
+        <button id="cl-clear-btn" class="danger" type="button">Clear Logs</button>
+      </div>
+      <p id="cl-status" style="font-size:.85rem;min-height:20px;margin-top:10px;"></p>
+    </div>
+
+    <!-- Download Logs -->
+    <div class="ss-card">
+      <h2>Download Logs</h2>
+      <p class="desc">Export system, conduit, or assembly logs filtered by date range.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;align-items:end;">
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Log Type</label>
+          <select id="dl-log-type" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;">
+            <option value="system">System Log</option>
+            <option value="conduit">Conduit Log</option>
+            <option value="assy">Assy Log</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">Start Date</label>
+          <input type="date" id="dl-start-date" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block;font-size:.8rem;font-weight:600;color:#4b5b76;margin-bottom:5px;">End Date</label>
+          <input type="date" id="dl-end-date" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:.9rem;background:#f8fafc;box-sizing:border-box;" />
+        </div>
+        <div style="padding-top:4px;">
+          <button id="dl-download-btn" class="primary" style="width:100%;">↓ Download</button>
+        </div>
+      </div>
+      <p id="dl-status" style="font-size:.85rem;min-height:20px;margin-top:10px;"></p>
+    </div>
+
+  </div>
+
+  <!-- Confirm Modal -->
+  <div class="modal-backdrop" id="confirm-modal">
+    <div class="modal">
+      <h3 id="modal-title">Confirm</h3>
+      <p id="modal-body">Are you sure?</p>
+      <div class="modal-actions">
+        <button id="modal-cancel-btn" class="secondary">Cancel</button>
+        <button id="modal-confirm-btn" class="danger">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-loader" style="position:fixed;inset:0;z-index:9999;background:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s;">
+    <div style="font-size:2rem;font-weight:800;color:#232629;letter-spacing:-.5px;">Program Editor</div>
+    <div style="margin-top:10px;color:#232629;opacity:.55;font-size:1rem;">SAGS · MVIIS</div>
+    <div style="margin-top:24px;width:40px;height:40px;border:4px solid rgba(35,38,41,.15);border-top-color:#FF7733;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+  </div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+  <footer style="position:fixed;bottom:0;left:0;right:0;z-index:100;background:#232629;color:rgba(255,255,255,.55);font-size:.7rem;text-align:center;padding:.45rem 1rem;letter-spacing:.02em;">
+    Solution developed &amp; created by <strong style="color:#FF7733;">Melvin</strong> &amp; <strong style="color:#FF7733;">Venfra Innovative Industrial Solutions</strong> &mdash; MVIIS &copy; 2021
+  </footer>
+  <script src="/static/system_settings.js"></script>
+  <script src="/static/nav_loader.js"></script>
+</body>
+</html>

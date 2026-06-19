@@ -17,8 +17,11 @@
       </div>
     </div>
     <ul class="app-nav-links">
-      <li><a class="app-nav-link" href="/" id="nav-editor">Editor</a></li>
+      <li><a class="app-nav-link" href="/recipe-management">Recipes</a></li>
+      <li><a class="app-nav-link" href="/editor" id="nav-editor">Editor</a></li>
       <li><a class="app-nav-link is-active" href="/preview" id="nav-preview">Preview</a></li>
+      <li><a class="app-nav-link" href="/configure">Configure</a></li>
+      <li><a class="app-nav-link" href="/system-settings">System</a></li>
     </ul>
     <div class="app-nav-toolbar">
       <button id="refresh-preview-btn" class="secondary">Refresh</button>
@@ -90,9 +93,16 @@
     </section>
   </main>
 
+  <div id="app-loader" style="position:fixed;inset:0;z-index:9999;background:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s;">
+    <div style="font-size:2rem;font-weight:800;color:#232629;letter-spacing:-.5px;">Program Editor</div>
+    <div style="margin-top:10px;color:#232629;opacity:.55;font-size:1rem;">SAGS · MVIIS</div>
+    <div style="margin-top:24px;width:40px;height:40px;border:4px solid rgba(35,38,41,.15);border-top-color:#FF7733;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+  </div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
   <footer style="background:#232629;color:rgba(255,255,255,.55);font-size:.7rem;text-align:center;padding:.45rem 1rem;letter-spacing:.02em;">
     Solution developed &amp; created by <strong style="color:#FF7733;">Melvin</strong> &amp; <strong style="color:#FF7733;">Venfra Innovative Industrial Solutions</strong> &mdash; MVIIS &copy; 2021
   </footer>
   <script src="/static/preview.js"></script>
+  <script src="/static/nav_loader.js"></script>
 </body>
 </html>

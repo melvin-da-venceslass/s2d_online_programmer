@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recipe Management – Program Editor</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    html, body { height: auto; overflow-y: auto; }
+    .rm-page { max-width: auto; width: 100%; margin: 48px auto; padding: 0 24px 80px; box-sizing: border-box; }
+    .rm-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 28px 32px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+    .rm-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .rm-card-head h2 { margin: 0; font-size: 1.15rem; font-weight: 700; color: #232629; }
+    #rm-search { padding: 7px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: .88rem; width: 220px; }
+    #rm-search:focus { outline: none; border-color: #FF7733; box-shadow: 0 0 0 3px rgba(255,119,51,.15); }
+
+    table.rm-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    .rm-table th { text-align: left; font-size: .75rem; font-weight: 700; color: #6b7a95; text-transform: uppercase; letter-spacing: .05em; padding: 0 12px 10px; border-bottom: 2px solid #f1f5f9; }
+    .rm-table td { padding: 12px; border-bottom: 1px solid #f1f5f9; color: #232629; vertical-align: middle; }
+    .rm-table tr:last-child td { border-bottom: none; }
+    .rm-table tr:hover td { background: #fafafa; }
+    .rm-table .step-badge { display: inline-block; background: #f1f5f9; color: #4b5b76; border-radius: 20px; padding: 2px 10px; font-size: .78rem; font-weight: 600; }
+    .rm-actions { display: flex; gap: 8px; }
+    .rm-actions button { padding: 5px 14px; font-size: .8rem; border-radius: 6px; }
+    #rm-status { font-size: .85rem; min-height: 20px; margin-top: 14px; }
+    #rm-status.ok { color: #16a34a; }
+    #rm-status.error { color: #dc2626; }
+    .empty-state { text-align: center; padding: 40px; color: #6b7a95; font-size: .9rem; }
+
+    /* Modal */
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-backdrop.open { display: flex; }
+    .modal { background: #fff; border-radius: 10px; padding: 28px 32px; max-width: 380px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,.18); }
+    .modal h3 { margin: 0 0 10px; font-size: 1.05rem; color: #232629; }
+    .modal p { margin: 0 0 14px; font-size: .88rem; color: #4b5b76; }
+    .modal input[type="text"] { width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: .9rem; box-sizing: border-box; margin-bottom: 16px; }
+    .modal input:focus { outline: none; border-color: #FF7733; box-shadow: 0 0 0 3px rgba(255,119,51,.15); }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+  <nav class="app-nav">
+    <div class="app-brand">
+      <div class="app-logo">PE</div>
+      <div>
+        <span class="app-name">Program Editor</span>
+        <span class="app-tagline">SAGS · MVIIS</span>
+      </div>
+    </div>
+    <ul class="app-nav-links">
+      <li><a class="app-nav-link is-active" href="/recipe-management">Recipes</a></li>
+      <li><a class="app-nav-link" href="/editor">Editor</a></li>
+      <li><a class="app-nav-link" href="/preview">Preview</a></li>
+      <li><a class="app-nav-link" href="/configure">Configure</a></li>
+      <li><a class="app-nav-link" href="/system-settings">System</a></li>
+    </ul>
+  </nav>
+
+  <div class="rm-page">
+    <div class="rm-card">
+      <div class="rm-card-head">
+        <h2>Recipe Management</h2>
+        <input type="search" id="rm-search" placeholder="Search recipes…" />
+      </div>
+
+      <table class="rm-table">
+        <thead>
+          <tr>
+            <th>Part Name</th>
+            <th>File</th>
+            <th>Steps</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rm-tbody">
+          <tr><td colspan="4" class="empty-state">Loading…</td></tr>
+        </tbody>
+      </table>
+      <p id="rm-status"></p>
+    </div>
+  </div>
+
+  <!-- Rename / Duplicate modal -->
+  <div class="modal-backdrop" id="name-modal">
+    <div class="modal">
+      <h3 id="name-modal-title">Rename Recipe</h3>
+      <p id="name-modal-desc">Enter a new name for the recipe.</p>
+      <input type="text" id="name-modal-input" placeholder="New name…" />
+      <div class="modal-actions">
+        <button id="name-modal-cancel" class="secondary">Cancel</button>
+        <button id="name-modal-confirm" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete confirm modal -->
+  <div class="modal-backdrop" id="delete-modal">
+    <div class="modal">
+      <h3>Delete Recipe</h3>
+      <p id="delete-modal-body">This will permanently remove the recipe and all its images. Continue?</p>
+      <div class="modal-actions">
+        <button id="delete-modal-cancel" class="secondary">Cancel</button>
+        <button id="delete-modal-confirm" class="danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-loader" style="position:fixed;inset:0;z-index:9999;background:#ffffff;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s;">
+    <div style="font-size:2rem;font-weight:800;color:#232629;letter-spacing:-.5px;">Program Editor</div>
+    <div style="margin-top:10px;color:#232629;opacity:.55;font-size:1rem;">SAGS · MVIIS</div>
+    <div style="margin-top:24px;width:40px;height:40px;border:4px solid rgba(35,38,41,.15);border-top-color:#FF7733;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+  </div>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+  <footer style="position:fixed;bottom:0;left:0;right:0;z-index:100;background:#232629;color:rgba(255,255,255,.55);font-size:.7rem;text-align:center;padding:.45rem 1rem;letter-spacing:.02em;">
+    Solution developed &amp; created by <strong style="color:#FF7733;">Melvin</strong> &amp; <strong style="color:#FF7733;">Venfra Innovative Industrial Solutions</strong> &mdash; MVIIS &copy; 2021
+  </footer>
+  <script src="/static/recipe_management.js"></script>
+  <script src="/static/nav_loader.js"></script>
+</body>
+</html>

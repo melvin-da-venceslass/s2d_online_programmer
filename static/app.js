@@ -36,8 +36,8 @@ const STEP_FIELDS = [
       { key: "target_max_angle", label: "Target Max Angle", type: "text" },
       { key: "target_tolerance", label: "Target Tolerance", type: "text" },
       { key: "target_rpm", label: "Target RPM", type: "text" },
-      { key: "TC_AM", label: "TC_AM", type: "checkbox" },
-      { key: "AC_TM", label: "AC_TM", type: "checkbox" },
+      { key: "TC_AM", label: "TC–AM · Torque Control / Angle Monitoring", type: "checkbox" },
+      { key: "AC_TM", label: "AC–TM · Angle Control / Torque Monitoring", type: "checkbox" },
       { key: "screw_info", label: "Screw Info", type: "text" },
       { key: "remarks", label: "Remarks", type: "text" },
       { key: "mes_enable_assy", label: "MES Enable Assembly", type: "checkbox" },
@@ -651,6 +651,7 @@ function isReloadNavigation() {
 
 function updateProgramInfoFields() {
   els.partname.value = state.program.partname || '';
+  if (els.recipeDescription) els.recipeDescription.value = state.program.description || '';
   els.enableMes.checked = Boolean(state.program.enable_mes);
   els.enableFtp.checked = Boolean(state.program.enable_ftp);
 }
@@ -873,6 +874,27 @@ function createField(field, value, index) {
       if (field.key === 'bc_child' && input.checked) {
         const parent = els.formContainer.querySelector('[data-key="bc_parent"]');
         if (parent) parent.checked = false;
+      }
+      // TC_AM / AC_TM are mutually exclusive — one must always be selected
+      if (field.key === 'TC_AM') {
+        if (input.checked) {
+          const other = els.formContainer.querySelector('[data-key="AC_TM"]');
+          if (other) other.checked = false;
+        } else {
+          // Prevent unchecking if AC_TM is also unchecked
+          const other = els.formContainer.querySelector('[data-key="AC_TM"]');
+          if (!other || !other.checked) { input.checked = true; return; }
+        }
+      }
+      if (field.key === 'AC_TM') {
+        if (input.checked) {
+          const other = els.formContainer.querySelector('[data-key="TC_AM"]');
+          if (other) other.checked = false;
+        } else {
+          // Prevent unchecking if TC_AM is also unchecked
+          const other = els.formContainer.querySelector('[data-key="TC_AM"]');
+          if (!other || !other.checked) { input.checked = true; return; }
+        }
       }
       markDirty();
     });
@@ -2280,6 +2302,7 @@ function applyProgramInfo() {
 
 function syncProgramInfoToState() {
   state.program.partname = els.partname.value.trim();
+  if (els.recipeDescription) state.program.description = els.recipeDescription.value.trim();
   state.program.enable_mes = els.enableMes.checked;
   state.program.enable_ftp = els.enableFtp.checked;
 }
@@ -2468,8 +2491,24 @@ function bindEvents() {
 }
 
 async function init() {
-  // Always start with a blank program on fresh load
-  state.program = blankProgram();
+  // If redirected from Recipe Management, load the server-side program state
+  const autoLoad = sessionStorage.getItem('rm_auto_load');
+  sessionStorage.removeItem('rm_auto_load');
+  if (autoLoad) {
+    try {
+      const resp = await fetch('/api/program');
+      if (resp.ok) {
+        const data = await resp.json();
+        state.program = (data && data.program) ? data.program : data;
+      } else {
+        state.program = blankProgram();
+      }
+    } catch (_) {
+      state.program = blankProgram();
+    }
+  } else {
+    state.program = blankProgram();
+  }
   const hasProgram = true;
   setEditorUnlocked(hasProgram);
   setSidebarSectionCollapsed('partRecipe', false);
@@ -2477,8 +2516,8 @@ async function init() {
   state.currentIndex = 0;
   state.lastSavedSnapshot = deepClone(state.program);
   bindEvents();
-  syncProgramInfoToState();
-  updateProgramInfoFields();
+  updateProgramInfoFields();   // populate fields FROM loaded state FIRST
+  syncProgramInfoToState();    // then sync state (now fields have correct values)
   await refreshProgramSelect();
   preloadProgramImages(state.program).catch(() => {
   });
