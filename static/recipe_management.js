@@ -102,7 +102,7 @@ function renderTable(recipes) {
          
           <button class="secondary btn-rename" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Rename</button>
           <button class="secondary btn-duplicate" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Duplicate</button>
-          <button class="danger btn-delete" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Delete</button>
+          <button class="danger btn-delete" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}"></button>
         <a class="btn-dl-zip" href="/api/recipes/${esc(r.file)}/download" download>↓ Recipe</a>
           <a class="btn-dl-pdf" href="/api/recipes/${esc(r.file)}/pdf" download>↓ Steps PDF</a>
           <a class="btn-dl-wi" href="/api/recipes/${esc(r.file)}/wi" download>↓ Work Instructions</a>
