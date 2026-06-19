@@ -962,11 +962,6 @@ function createCommonImageSection(step, index) {
   title.textContent = 'Image Upload & Annotation';
   sectionEl.appendChild(title);
 
-  const note = document.createElement('p');
-  note.className = 'section note';
-  note.textContent = 'Upload image is shared and available for all modes.';
-  sectionEl.appendChild(note);
-
   const panel = document.createElement('div');
   panel.className = 'image-upload-panel';
 
@@ -1189,6 +1184,8 @@ function createCommonImageSection(step, index) {
     canvas.style.cursor = selectedTool === 'pip' ? 'move' : 'crosshair';
   }
 
+  let pipPanelEl = null; // set after pipPanel is created
+
   function setSelectedTool(nextTool) {
     if (!TOOL_OPTIONS.some((tool) => tool.value === nextTool)) return;
     if (selectedTool === 'pip' && nextTool !== 'pip' && pipEdit) {
@@ -1201,6 +1198,7 @@ function createCommonImageSection(step, index) {
       button.setAttribute('aria-pressed', String(isActive));
     });
     updateCanvasCursor();
+    if (pipPanelEl) pipPanelEl.hidden = selectedTool !== 'pip';
   }
 
   TOOL_OPTIONS.forEach((tool) => {
@@ -1752,27 +1750,105 @@ function createCommonImageSection(step, index) {
   setCanvasZoom(Number(zoomSlider.value));
   setSelectedTool(selectedTool);
 
-  controls.append(
-    fileInput,
-    toolButtonsWrap,
-    colorPicker,
-    textInput,
-    textSize,
-    zoomWrap,
-    pipFileInput,
-    pipCropZoom,
-    pipCropX,
-    pipCropY,
-    pipApplyBtn,
-    pipCancelBtn,
-    pipHelp,
-    saveEditBtn,
-    undoBtn,
-    rotateLeftBtn,
-    rotateRightBtn,
-    clearBtn
-  );
-  panel.append(retainModeRow, canvasWrap, controls, hidden);
+  // ── Upload row ───────────────────────────────────────────────────────────
+  const uploadRow = document.createElement('div');
+  uploadRow.className = 'img-upload-row';
+
+  const fileLabel = document.createElement('label');
+  fileLabel.htmlFor = fileInput.id;
+  fileLabel.className = 'img-file-btn';
+  fileLabel.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0"><path d="M8 1a.5.5 0 0 1 .5.5v6.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 8.293V1.5A.5.5 0 0 1 8 1zM1.5 11h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1z"/></svg> Choose Image';
+
+  const fileNameDisplay = document.createElement('span');
+  fileNameDisplay.className = 'img-file-name';
+  fileNameDisplay.textContent = (hidden.value && hidden.value.startsWith('data:')) ? 'Image loaded' : (hidden.value ? hidden.value.split('/').pop() : 'No image selected');
+
+  fileInput.addEventListener('change', () => {
+    const [f] = fileInput.files || [];
+    fileNameDisplay.textContent = f ? f.name : 'No image selected';
+  });
+  fileInput.style.display = 'none';
+
+  clearBtn.className = 'secondary img-clear-btn';
+  clearBtn.innerHTML = '&#x2715; Clear';
+
+  uploadRow.append(fileInput, fileLabel, fileNameDisplay, clearBtn);
+
+  // ── Toolbar ──────────────────────────────────────────────────────────────
+  const toolbar = document.createElement('div');
+  toolbar.className = 'img-toolbar';
+
+  // Group: Draw tools
+  const toolsGroup = document.createElement('div');
+  toolsGroup.className = 'img-toolbar-group';
+  const toolsGroupLabel = document.createElement('span');
+  toolsGroupLabel.className = 'img-group-label';
+  toolsGroupLabel.textContent = 'Draw';
+  toolsGroup.append(toolsGroupLabel, toolButtonsWrap);
+
+  // Group: Style (color + text)
+  const styleGroup = document.createElement('div');
+  styleGroup.className = 'img-toolbar-group';
+  const styleGroupLabel = document.createElement('span');
+  styleGroupLabel.className = 'img-group-label';
+  styleGroupLabel.textContent = 'Style';
+  colorPicker.title = 'Annotation colour';
+  textInput.placeholder = 'Text to draw…';
+  textSize.placeholder = 'px';
+  textSize.title = 'Font size';
+  styleGroup.append(styleGroupLabel, colorPicker, textInput, textSize);
+
+  // Group: Edit actions
+  const actionsGroup = document.createElement('div');
+  actionsGroup.className = 'img-toolbar-group';
+  const actionsGroupLabel = document.createElement('span');
+  actionsGroupLabel.className = 'img-group-label';
+  actionsGroupLabel.textContent = 'Edit';
+  saveEditBtn.innerHTML = '&#x2713; Apply Edits';
+  undoBtn.innerHTML = '&#x21a9; Undo';
+  rotateLeftBtn.textContent = '\u21ba';
+  rotateLeftBtn.title = 'Rotate Left';
+  rotateRightBtn.textContent = '\u21bb';
+  rotateRightBtn.title = 'Rotate Right';
+  actionsGroup.append(actionsGroupLabel, saveEditBtn, undoBtn, rotateLeftBtn, rotateRightBtn, zoomWrap);
+
+  toolbar.append(toolsGroup, styleGroup, actionsGroup);
+
+  // ── PiP panel ────────────────────────────────────────────────────────────
+  const pipPanel = document.createElement('div');
+  pipPanel.className = 'img-pip-panel';
+  pipPanel.hidden = true;
+  pipPanelEl = pipPanel;
+
+  const pipPanelTitle = document.createElement('span');
+  pipPanelTitle.className = 'img-group-label';
+  pipPanelTitle.textContent = 'Picture-in-Picture Controls';
+
+  pipFileInput.className = 'img-pip-file';
+  pipFileInput.title = 'Choose PiP overlay image';
+
+  const pipZoomLbl = document.createElement('label');
+  pipZoomLbl.className = 'img-pip-ctrl';
+  pipZoomLbl.textContent = 'Zoom';
+  pipZoomLbl.append(pipCropZoom);
+
+  const pipXLbl = document.createElement('label');
+  pipXLbl.className = 'img-pip-ctrl';
+  pipXLbl.textContent = '\u21d4 H';
+  pipXLbl.append(pipCropX);
+
+  const pipYLbl = document.createElement('label');
+  pipYLbl.className = 'img-pip-ctrl';
+  pipYLbl.textContent = '\u21d5 V';
+  pipYLbl.append(pipCropY);
+
+  pipPanel.append(pipPanelTitle, pipFileInput, pipZoomLbl, pipXLbl, pipYLbl, pipApplyBtn, pipCancelBtn, pipHelp);
+
+  // ── Retain row ───────────────────────────────────────────────────────────
+  retainModeRow.className = 'img-retain-row';
+
+  // ── Final assembly ───────────────────────────────────────────────────────
+  panel.append(uploadRow, canvasWrap, toolbar, pipPanel, retainModeRow, hidden);
   sectionEl.appendChild(panel);
   return sectionEl;
 }

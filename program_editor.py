@@ -42,6 +42,7 @@ DOWNLOAD_LOGS_FILE = BASE_DIR / "templates" / "download_logs.html"
 CONFIGURE_FILE = BASE_DIR / "templates" / "configure.html"
 SYSTEM_SETTINGS_FILE = BASE_DIR / "templates" / "system_settings.html"
 RECIPE_MANAGEMENT_FILE = BASE_DIR / "templates" / "recipe_management.html"
+HISTORY_FILE = BASE_DIR / "templates" / "history.html"
 PROGRAMS_DIR = Path(settings.programs_dir)
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 
@@ -1515,6 +1516,111 @@ def api_download_logs(
 
 
 # ── App Configuration ─────────────────────────────────────────────────────────
+
+@app.get("/history", response_class=HTMLResponse)
+def history_page(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse(url="/login")
+    return HTMLResponse(content=HISTORY_FILE.read_text(encoding="utf-8"))
+
+
+@app.get("/api/logs/search")
+def api_logs_search(
+    request: Request,
+    log_type: str = Query(..., description="conduit | assy"),
+    query: str = Query(..., description="Serial number or value to search"),
+):
+    """Search conduit or assy logs by a serial / value string."""
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    q = query.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query must not be empty")
+
+    if log_type == "conduit":
+        log_dir = Path(settings.conduit_log_path)
+        if not log_dir.exists() or not log_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Conduit log directory not found")
+
+        # Find all base names (without _response suffix) containing the query
+        results = []
+        seen: set = set()
+        for f in sorted(log_dir.iterdir()):
+            if not f.is_file() or f.suffix.lower() != ".json":
+                continue
+            stem = f.stem
+            # Determine base serial: strip _response suffix
+            if stem.lower().endswith("_response"):
+                base = stem[:-9]  # remove "_response"
+            else:
+                base = stem
+            if q.lower() not in base.lower():
+                continue
+            if base in seen:
+                continue
+            seen.add(base)
+            request_file = log_dir / f"{base}.json"
+            response_file = log_dir / f"{base}_response.json"
+            left = None
+            right = None
+            try:
+                if request_file.exists():
+                    left = json.loads(request_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            try:
+                if response_file.exists():
+                    right = json.loads(response_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            results.append({"serial": base, "request": left, "response": right})
+        return {"log_type": "conduit", "query": q, "results": results}
+
+    elif log_type == "assy":
+        log_dir = Path(settings.assembly_log_path)
+        if not log_dir.exists() or not log_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Assy log directory not found")
+
+        df_list: List[Any] = []
+        for f in sorted(log_dir.iterdir()):
+            try:
+                if (
+                    f.is_file()
+                    and f.suffix.lower() == ".json"
+                    and re.match(r"^[a-zA-Z0-9-]+\.json$", f.name)
+                ):
+                    tdf = pd.read_json(f)
+                    if len(tdf.get("steps", [])) > 0:
+                        df_list.append(tdf)
+            except Exception:
+                pass
+
+        if not df_list:
+            return {"log_type": "assy", "query": q, "columns": [], "rows": []}
+
+        df = pd.concat(df_list, ignore_index=True)
+        ndf = pd.json_normalize(df["steps"])
+        df = df.drop("steps", axis=1)
+        ndf.reset_index(drop=True, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        df = pd.concat([df, ndf], axis=1)
+
+        # Filter rows where any column contains the query (case-insensitive)
+        mask = df.apply(
+            lambda col: col.astype(str).str.contains(q, case=False, na=False)
+        ).any(axis=1)
+        df = df[mask]
+
+        columns = list(df.columns)
+        rows = df.where(df.notna(), other=None).values.tolist()
+        # Convert to JSON-serialisable types
+        rows = [[None if (isinstance(v, float) and v != v) else v for v in r] for r in rows]
+        return {"log_type": "assy", "query": q, "columns": columns, "rows": rows}
+
+    else:
+        raise HTTPException(status_code=400, detail="log_type must be conduit or assy")
+
 
 @app.get("/configure", response_class=HTMLResponse)
 def configure_page(request: Request):
