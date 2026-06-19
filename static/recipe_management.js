@@ -92,7 +92,7 @@ function renderTable(recipes) {
   }
   tbody.innerHTML = recipes.map((r) => `
     <tr data-file="${esc(r.file)}">
-      <td>${esc(r.partname)}</td>
+      <td><b><i>${esc(r.partname)}</i></b></td>
       <!--<td style="color:#6b7a95;font-size:.82rem;">${esc(r.file)}</td> -->
       <td><span class="step-badge">${r.steps} step${r.steps !== 1 ? 's' : ''}</span></td>
       <td>
@@ -103,9 +103,9 @@ function renderTable(recipes) {
           <button class="secondary btn-rename" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Rename</button>
           <button class="secondary btn-duplicate" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Duplicate</button>
           <button class="danger btn-delete" data-file="${esc(r.file)}" data-partname="${esc(r.partname)}">Delete</button>
-        <a class="secondary" href="/api/recipes/${esc(r.file)}/download" download>↓ Recipie (.zip)</a>
-          <a class="secondary" href="/api/recipes/${esc(r.file)}/pdf" download>↓ Step(.pdf)</a>
-          <a class="secondary" href="/api/recipes/${esc(r.file)}/wi" download>↓ Work Instructions(.pdf)</a>
+        <a class="btn-dl-zip" href="/api/recipes/${esc(r.file)}/download" download>↓ Recipe</a>
+          <a class="btn-dl-pdf" href="/api/recipes/${esc(r.file)}/pdf" download>↓ Steps PDF</a>
+          <a class="btn-dl-wi" href="/api/recipes/${esc(r.file)}/wi" download>↓ Work Instructions</a>
         </div>
       </td>
     </tr>`).join('');
@@ -235,6 +235,38 @@ deleteConfirm.addEventListener('click', async () => {
     await loadRecipes();
   } catch (e) {
     setStatus(`Failed: ${e}`, 'error');
+  }
+});
+
+// ── Upload Recipe ZIP ─────────────────────────────────────────────────────────
+const uploadZipInput  = document.getElementById('rm-upload-zip');
+const uploadZipStatus = document.getElementById('rm-upload-status');
+
+uploadZipInput.addEventListener('change', async () => {
+  const file = uploadZipInput.files[0];
+  if (!file) return;
+  uploadZipStatus.textContent = 'Uploading…';
+  uploadZipStatus.style.color = '#6b7a95';
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const resp = await fetch('/api/upload-zip', { method: 'POST', body: formData });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      uploadZipStatus.textContent = err.detail || `Upload failed (${resp.status})`;
+      uploadZipStatus.style.color = '#dc2626';
+      return;
+    }
+    const data = await resp.json();
+    const name = data && data.partname ? data.partname : file.name;
+    uploadZipStatus.textContent = `✓ Uploaded "${name}"`;
+    uploadZipStatus.style.color = '#16a34a';
+    await loadRecipes();
+  } catch (e) {
+    uploadZipStatus.textContent = `Error: ${e}`;
+    uploadZipStatus.style.color = '#dc2626';
+  } finally {
+    uploadZipInput.value = '';
   }
 });
 

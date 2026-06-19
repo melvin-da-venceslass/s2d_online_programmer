@@ -30,8 +30,8 @@ const els = {
 };
 
 // ── Field group definitions ─────────────────────────────────────────────────
-const BARCODE_KEYS   = ['bc_title','bc_parent','bc_child','whatloc_enabled',
-                        'enable_barcode_mes_t','enable_barcode_mes_nt',
+const BARCODE_KEYS   = ['bc_title','bc_parent','enable_barcode_mes_t','whatloc_enabled',
+                        'bc_child','enable_barcode_mes_nt',
                         'restart_on_failure','reg_ex_validator'];
 const WHATLOC_KEYS   = ['check_short_workstation','check_part_number','check_ref_designator'];
 const ACK_KEYS       = ['ack_title','enable_ack_mes'];
@@ -96,6 +96,18 @@ function modeLabel(step) {
   return 'No mode selected';
 }
 function formatFieldKey(key) {
+  const LABEL_OVERRIDES = {
+    enable_barcode_mes_t:  'Add as Tracked Component',
+    enable_barcode_mes_nt: 'Add as Non-Tracked Component',
+    whatloc_enabled: 'Check Location',
+    bc_parent: 'Barcode -> Parent',
+    bc_child: 'Barcode -> Child',
+    enable_ack_mes: 'Add Acknowledgement to MES',
+    TC_AM: 'Torque Control - Angle Monitoring',
+    AC_TM: 'Angle Control - Torque Monitoring',
+    mes_enable_assy: 'Add Fastening Result to MES',
+  };
+  if (LABEL_OVERRIDES[key]) return LABEL_OVERRIDES[key];
   return String(key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 function showStepLoader(visible) {

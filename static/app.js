@@ -6,14 +6,14 @@ const STEP_FIELDS = [
     fields: [
       { key: "bc_title", label: "Barcode Title", type: "text" },
       { key: "bc_parent", label: "BC Parent", type: "checkbox" },
-      { key: "bc_child", label: "BC Child", type: "checkbox" },
+      { key: "enable_barcode_mes_t", label: "Add as Tracked Components", type: "checkbox" },
       { key: "whatloc_enabled", label: "What Location Enabled", type: "checkbox" },
+      { key: "bc_child", label: "BC Child", type: "checkbox" },
+      { key: "enable_barcode_mes_nt", label: "Add as Non Tracked Components", type: "checkbox" },
+      { key: "restart_on_failure", label: "Restart On Failure", type: "checkbox" },
       { key: "check_short_workstation", label: "Check Workstation", type: "text" },
       { key: "check_part_number", label: "Check Part Number", type: "text" },
       { key: "check_ref_designator", label: "Check Ref Designator", type: "text" },
-      { key: "enable_barcode_mes_t", label: "Enable Barcode MES (T)", type: "checkbox" },
-      { key: "enable_barcode_mes_nt", label: "Enable Barcode MES (NT)", type: "checkbox" },
-      { key: "restart_on_failure", label: "Restart On Failure", type: "checkbox" },
       { key: "reg_ex_validator", label: "Regex Validator", type: "text" },
     ]
   },
@@ -97,7 +97,6 @@ const els = {
   deleteStepBtn: document.getElementById('delete-step-btn'),
   cloneStepBtn: document.getElementById('clone-step-btn'),
   uploadFile: document.getElementById('upload-file'),
-  uploadZipFile: document.getElementById('upload-zip-file'),
   stepList: document.getElementById('step-list'),
   stepTitle: document.getElementById('step-title'),
   modeSummary: document.getElementById('mode-summary'),
@@ -681,6 +680,11 @@ function getActiveMode(step) {
 }
 
 function setExclusiveMode(mode) {
+  const stepNo = state.currentIndex + 1;
+  if (stepNo === 1 && mode !== 'Barcode') {
+    alert('Step 1 is a parent barcode scan and must use Barcode mode.');
+    return;
+  }
   const step = state.program.steps[state.currentIndex];
   step.enable_barcode = mode === 'Barcode';
   step.request_ack = mode === 'Acknowledgement';
@@ -705,10 +709,16 @@ function applyExclusiveModeFromStep(step, changedKey) {
 
 function renderModeCards(step) {
   const activeMode = getActiveMode(step);
+  const isStep1 = (state.currentIndex + 1) === 1;
   els.modeCards.forEach((card) => {
     const title = card.querySelector('h3').textContent;
+    const locked = isStep1 && title !== 'Barcode';
     card.classList.toggle('active', activeMode === title);
-    card.classList.toggle('selectable', true);
+    card.classList.toggle('selectable', !locked);
+    card.classList.toggle('mode-card-locked', locked);
+    card.style.opacity = locked ? '0.35' : '';
+    card.style.pointerEvents = locked ? 'none' : '';
+    card.title = locked ? 'Not available for Step 1 (parent barcode scan)' : '';
   });
 }
 
@@ -857,6 +867,16 @@ function createField(field, value, index) {
     if (field.key === 'bc_parent' || field.key === 'bc_child') {
       input.disabled = true;
       input.title = 'This value is set automatically by step number.';
+    }
+    // MES tracking fields are only applicable to child (non-parent, non-step-1) barcode steps
+    if (field.key === 'enable_barcode_mes_t' || field.key === 'enable_barcode_mes_nt') {
+      const step = state.program.steps[state.currentIndex];
+      const isParent = step && (step.bc_parent === true || Number(step.step_no) === 1);
+      if (isParent) {
+        input.disabled = true;
+        input.checked = false;
+        input.title = 'Not applicable for parent / Step 1 barcode scans.';
+      }
     }
     input.dataset.key = field.key;
     input.addEventListener('change', () => {
@@ -2401,18 +2421,6 @@ function bindEvents() {
     card.addEventListener('click', () => {
       setExclusiveMode(card.querySelector('h3').textContent);
     });
-  });
-
-  els.uploadZipFile.addEventListener('change', async () => {
-    const file = els.uploadZipFile.files[0];
-    if (!file) return;
-    if (state.dirty) {
-      alert('Save the current step before uploading new data.');
-      els.uploadZipFile.value = '';
-      return;
-    }
-    await uploadRecipeZip(file);
-    els.uploadZipFile.value = '';
   });
 
   if (els.uploadCancelBtn) {
