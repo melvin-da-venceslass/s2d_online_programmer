@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _expand_path(value: str) -> str:
+    return os.path.expandvars(os.path.expanduser(value.strip()))
+
+
 def _load_dotenv_file() -> None:
     env_path = Path(__file__).resolve().parent / ".env"
     if not env_path.exists() or not env_path.is_file():
@@ -19,7 +23,7 @@ def _load_dotenv_file() -> None:
         key = key.strip()
         if not key:
             continue
-        os.environ.setdefault(key, value.strip())
+        os.environ.setdefault(key, _expand_path(value))
 
 
 _load_dotenv_file()
@@ -51,17 +55,17 @@ def _resolve_log_path(env_prefix: str, default_linux: str) -> str:
     """
     explicit = os.getenv(f"{env_prefix}_PATH", "").strip()
     if explicit:
-        return explicit
+        return _expand_path(explicit)
 
     platform = sys.platform
     if platform == "win32":
         val = os.getenv(f"WIN_{env_prefix}_PATH", "").strip()
-        return val if val else default_linux
+        return _expand_path(val if val else default_linux)
     if platform == "darwin":
         val = os.getenv(f"MAC_{env_prefix}_PATH", "").strip()
-        return val if val else str(Path(__file__).resolve().parent / "logs" / env_prefix.lower().replace("_log", ""))
+        return _expand_path(val if val else str(Path(__file__).resolve().parent / "logs" / env_prefix.lower().replace("_log", "")))
     val = os.getenv(f"LINUX_{env_prefix}_PATH", "").strip()
-    return val if val else default_linux
+    return _expand_path(val if val else default_linux)
 
 
 def _resolve_mes_config_file() -> str:
@@ -71,17 +75,17 @@ def _resolve_mes_config_file() -> str:
     """
     explicit = os.getenv("MES_CONFIG_FILE", "").strip()
     if explicit:
-        return explicit
+        return _expand_path(explicit)
 
     platform = sys.platform
     if platform == "win32":
         val = os.getenv("WIN_MES_CONFIG", "").strip()
-        return val if val else r"C:\Users\Melvin Venceslass\APP_ENV\mes_config.json"
+        return _expand_path(val if val else r"C:\Users\Melvin Venceslass\APP_ENV\mes_config.json")
     if platform == "darwin":
         val = os.getenv("MAC_MES_CONFIG", "").strip()
-        return val if val else str(Path(__file__).resolve().parent / "mes_config.json")
+        return _expand_path(val if val else str(Path(__file__).resolve().parent / "mes_config.json"))
     val = os.getenv("LINUX_MES_CONFIG", "").strip()
-    return val if val else "/home/mviis/mes_config.json"
+    return _expand_path(val if val else "/home/mviis/mes_config.json")
 
 
 def _resolve_programs_dir() -> str:
@@ -93,24 +97,24 @@ def _resolve_programs_dir() -> str:
     """
     explicit = os.getenv("PROGRAMS_DIR", "").strip()
     if explicit:
-        return explicit
+        return _expand_path(explicit)
 
     platform = sys.platform  # 'win32', 'linux', 'darwin'
 
     if platform == "win32":
         val = os.getenv("WIN_PROGRAMS_DIR", "").strip()
-        return val if val else r"C:\Users\Melvin Venceslass\APP_ENV\programs"
+        return _expand_path(val if val else r"C:\Users\Melvin Venceslass\APP_ENV\programs")
 
     if platform == "darwin":
         val = os.getenv("MAC_PROGRAMS_DIR", "").strip()
         if val:
-            return val
+            return _expand_path(val)
         # default: <project_dir>/programs for macOS when not set
-        return str(Path(__file__).resolve().parent / "programs")
+        return _expand_path(str(Path(__file__).resolve().parent / "programs"))
 
     # linux and everything else
     val = os.getenv("LINUX_PROGRAMS_DIR", "").strip()
-    return val if val else "/home/mviis/programs"
+    return _expand_path(val if val else "/home/mviis/programs")
 
 
 @dataclass(frozen=True)
