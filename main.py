@@ -1,11 +1,17 @@
-from program_editor import app
+try:
+    from .program_editor import app
+except ImportError:
+    from program_editor import app
 
 __all__ = ["app"]
 
 if __name__ == "__main__":
     import uvicorn
 
-    from config import settings
+    try:
+        from .config import settings
+    except ImportError:
+        from config import settings
 
     uvicorn.run(
         "main:app",

@@ -30,7 +30,12 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
-from config import settings
+try:
+    # Prefer package-relative import to avoid colliding with top-level config.py
+    # when bundled as a single executable.
+    from .config import settings
+except ImportError:
+    from config import settings
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "template.json"
