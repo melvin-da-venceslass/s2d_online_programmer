@@ -126,9 +126,9 @@ class Settings:
 
     programs_dir: str = _resolve_programs_dir()
 
-    conduit_log_path: str = _resolve_log_path("CONDUIT_LOG", "/home/mviis/logs/conduit")
-    assembly_log_path: str = _resolve_log_path("ASSEMBLY_LOG", "/home/mviis/logs/assy")
-    system_log_path: str = _resolve_log_path("SYSTEM_LOG", "/home/mviis/logs/system")
+    conduit_log_path: str = _resolve_log_path("CONDUIT_LOG", "/home/mviis/conduit_log")
+    assembly_log_path: str = _resolve_log_path("ASSEMBLY_LOG", "/home/mviis/assy_log")
+    system_log_path: str = _resolve_log_path("SYSTEM_LOG", "/home/mviis/logs/log")
 
     mes_config_file: str = _resolve_mes_config_file()
 
